@@ -1,0 +1,67 @@
+/*
+Farben
+*/
+
+:root {
+    --Kraft:      #fff495;
+    --Kraft-dark: #ede59f;
+    --Trafk:      #5a3998;
+    --Trafk-dark: #351b67;
+}
+
+#chat-window {
+    position: fixed;
+    top: 8rem;
+    right: 3rem;
+    left: 3rem;
+    bottom: 8rem;
+}
+#chat-input-row {
+    position: fixed;
+    bottom: 4rem;
+    height: 6rem;
+    left: 4rem;
+    right: 4rem;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 1rem;
+}
+
+main::before {
+    content: "";
+    position: absolute;
+    top: 0; left: 0; right: 0; bottom: 0;
+
+    background-image: url("wiki/assets/SourceHop-Images/TrafkSite/13WorldsBG3.png");
+    background-repeat: no-repeat;
+    background-position: center top;
+    background-position-y: -5rem;
+    background-size: contain;
+}
+
+#chat-input {
+    padding: 0.65rem;
+    font-size: 1.15rem;
+    font-weight: bold;
+    border: none;
+    border-radius: 15px;
+    filter: drop-shadow(0px 0px 5px var(--Kraft));
+    background-color: var(--Kraft);
+}
+#chat-input::placeholder {
+    color: black;
+}
+
+#send-btn {
+    height: 3rem;
+    width: 3rem;
+    color: white;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background-color: var(--Trafk);
+    border: 5px solid var(--Trafk-dark);
+    border-radius: 50%;
+    filter: none;
+}
