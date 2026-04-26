@@ -98,17 +98,18 @@ async function fetchFileContent(url) {
 }
 
 async function loadSitemap() {
-    // Hier definieren wir die Pfade für beide Basis-URLs
     const sources = [
         '/TrafkSite/sitemap.xml',
         'sitemap.xml',
     ];
 
-    for (const path of sources) {
+    const seenUrls = new Set();
+
+    for (const src of sources) {
         try {
-            const response = await fetch(path);
+            const response = await fetch(src);
             if (!response.ok) {
-                console.warn(`Sitemap nicht gefunden unter: ${path}`);
+                console.warn(`Sitemap nicht gefunden unter: ${src}`);
                 continue;
             }
             const xmlText = await response.text();
@@ -117,17 +118,21 @@ async function loadSitemap() {
             let count = 0;
             for (const match of locMatches) {
                 let url = match[1].trim();
-                // Filter für das Raufbold-Archiv beibehalten
-                if (!url.includes('projects/Raufbold3bs-Scratch-Archive/Raufbold3bs-Scratch-Archive/')) {
+                if (
+                    !url.includes('projects/Raufbold3bs-Scratch-Archive/Raufbold3bs-Scratch-Archive/')
+                    && !seenUrls.has(url)
+                ) {
+                    seenUrls.add(url);
                     sitemapUrls.push(url);
                     count++;
                 }
             }
-            console.log(`Aus Quelle ${path} wurden ${count} URLs geladen.`);
-            // WICHTIG: Kein "return" mehr hier, damit er alle Quellen durchgeht!
+            console.log(`Aus Quelle ${src} wurden ${count} neue URLs geladen.`);
+            // Wenn erfolgreich geladen, stop – keine Duplikate aus Fallback
+            break;
 
         } catch (e) {
-            console.warn(`Fehler beim Laden von ${path}: ${e.message}`);
+            console.warn(`Fehler beim Laden von ${src}: ${e.message}`);
         }
     }
 }
@@ -179,7 +184,7 @@ function extractImagesFromRaw(rawText, docUrl) {
 }
 
 async function fetchContext(userMessage) {
-    if (!indexReady) return '';
+    if (!indexReady) return { context: '', images: [] };
     const msgLower = userMessage.toLowerCase();
     const wantsBackup = /backup|früher|alte version|unterschied|damals|war anders|old version|difference|back then|used to be/i.test(msgLower);
     const words = msgLower.split(/\W+/).filter(w => w.length > 2);
@@ -294,13 +299,13 @@ function addImages(images) {
         imgEl.alt = img.label;
         imgEl.title = img.label;
         imgEl.style.cssText = `
-            max-width: 280px;
-            max-height: 220px;
-            border-radius: 6px;
-            border: 1px solid #5a3998;
-            cursor: pointer;
-            object-fit: contain;
-            background: #1a0a2e;
+        max-width: 280px;
+        max-height: 220px;
+        border-radius: 6px;
+        border: 1px solid #5a3998;
+        cursor: pointer;
+        object-fit: contain;
+        background: #1a0a2e;
         `;
         // Click to open full size
         imgEl.addEventListener('click', () => window.open(img.url, '_blank'));
