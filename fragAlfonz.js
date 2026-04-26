@@ -8,7 +8,6 @@ let chatWindow, inputField, sendBtn, quickActions;
 // ================================
 const PROXY_URL = "https://trafkhop-alfonzproxy.hf.space/chat";
 const BASE_URL = "https://trafkhop-entertainment.github.io/TrafkSite/";
-const BASE_URL2 = "https://trafkhop-entertainment.github.io/SourceHop-Notes/";
 let chatHistory = [];
 let sitemapUrls = [];
 let searchIndex = [];
@@ -65,7 +64,7 @@ function isBackupUrl(url) {
 
 function shouldIndexUrl(url) {
     const lower = url.toLowerCase();
-    if (lower.includes('/games/released/raufbold3bsscratcharchive/repo/')) return false;
+    if (lower.includes('projects/Raufbold3bs-Scratch-Archive/Raufbold3bs-Scratch-Archive/')) return false;
     const allowedExtensions = ['.html', '.md', '.txt'];
     return allowedExtensions.some(ext => lower.endsWith(ext));
 }
@@ -101,10 +100,8 @@ async function fetchFileContent(url) {
 async function loadSitemap() {
     // Hier definieren wir die Pfade für beide Basis-URLs
     const sources = [
-        '/Trafk-Center/sitemap.xml',
-        './sitemap.xml',
+        '/TrafkSite/sitemap.xml',
         'sitemap.xml',
-        BASE_URL2 + 'sitemap.xml' // Die 2. Quelle explizit hinzufügen
     ];
 
     for (const path of sources) {
@@ -121,7 +118,7 @@ async function loadSitemap() {
             for (const match of locMatches) {
                 let url = match[1].trim();
                 // Filter für das Raufbold-Archiv beibehalten
-                if (!url.includes('/games/released/Raufbold3bs-Scratch-Archive/Raufbold3bs-Scratch-Archive/')) {
+                if (!url.includes('projects/Raufbold3bs-Scratch-Archive/Raufbold3bs-Scratch-Archive/')) {
                     sitemapUrls.push(url);
                     count++;
                 }
