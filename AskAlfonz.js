@@ -99,7 +99,6 @@ async function fetchFileContent(url) {
 
 async function loadSitemap() {
     const sources = [
-        '/TrafkSite/sitemap.xml',
         'sitemap.xml',
     ];
 
