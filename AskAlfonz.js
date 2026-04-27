@@ -240,6 +240,14 @@ async function fetchContext(userMessage) {
 // ================================
 // API AUFRUFE
 // ================================
+
+// Weckt den HF Space auf (fire-and-forget beim Seitenstart)
+async function wakeUpProxy() {
+    try {
+        await fetch(PROXY_URL, { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" });
+    } catch (_) {}
+}
+
 async function queryGitHubModels(finalPrompt, userText, currentSystemPrompt) {
     const historyWindow = chatHistory.slice(-6);
     const body = {
@@ -250,19 +258,45 @@ async function queryGitHubModels(finalPrompt, userText, currentSystemPrompt) {
         ]
     };
 
-    const response = await fetch(PROXY_URL, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(body)
-    });
+    // Retry-Logik: HF Spaces schlafen ein und brauchen ~30-60s zum Aufwachen
+    const MAX_RETRIES = 3;
+    const RETRY_DELAY_MS = 8000;
+    let lastError = null;
 
-    if (!response.ok) throw new Error("Verbindungsprobleme.");
-    const result = await response.json();
-    const reply = result?.choices?.[0]?.message?.content || "";
+    for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
+        try {
+            const response = await fetch(PROXY_URL, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify(body)
+            });
 
-    chatHistory.push({ role: "user", content: userText });
-    chatHistory.push({ role: "assistant", content: reply });
-    return reply;
+            if (response.ok) {
+                const result = await response.json();
+                const reply = result?.choices?.[0]?.message?.content || "";
+                chatHistory.push({ role: "user", content: userText });
+                chatHistory.push({ role: "assistant", content: reply });
+                return reply;
+            }
+
+            // 404/503 = Space schläft noch, retry
+            if ((response.status === 404 || response.status === 503) && attempt < MAX_RETRIES) {
+                console.warn(`Proxy schläft noch (${response.status}), Versuch ${attempt}/${MAX_RETRIES}...`);
+                await new Promise(r => setTimeout(r, RETRY_DELAY_MS));
+                continue;
+            }
+
+            throw new Error(`Verbindungsprobleme. (HTTP ${response.status})`);
+        } catch (e) {
+            lastError = e;
+            if (attempt < MAX_RETRIES) {
+                console.warn(`Netzwerkfehler, Versuch ${attempt}/${MAX_RETRIES}:`, e.message);
+                await new Promise(r => setTimeout(r, RETRY_DELAY_MS));
+            }
+        }
+    }
+
+    throw lastError || new Error("Verbindungsprobleme.");
 }
 // ================================
 // UI & NACHRICHTEN LOGIK
@@ -359,52 +393,59 @@ async function sendMessage() {
     const loadingDiv = document.createElement('div');
     loadingDiv.id = loadingId;
     loadingDiv.innerHTML = `<b style="color:#9069da;">${currentBotName}:</b> <p><em>...searching the faded pages...</em></p>`;
-    chatWindow.appendChild(loadingDiv);
-    chatWindow.scrollTop = chatWindow.scrollHeight;
+    // Zeige nach 5s einen Hinweis, falls Proxy noch hochfährt
+    const wakeUpHint = setTimeout(() => {
+        const el = document.getElementById(loadingId);
+        if (el) el.querySelector('em').textContent = '...waking the Archive from its slumber... (this may take ~30s)';
+    }, 5000);
+        chatWindow.appendChild(loadingDiv);
+        chatWindow.scrollTop = chatWindow.scrollHeight;
 
-    try {
-        let lastQuestion = "";
-        for (let i = chatHistory.length - 1; i >= 0; i--) {
-            if (chatHistory[i].role === "user") {
-                lastQuestion = chatHistory[i].content;
-                break;
+        try {
+            let lastQuestion = "";
+            for (let i = chatHistory.length - 1; i >= 0; i--) {
+                if (chatHistory[i].role === "user") {
+                    lastQuestion = chatHistory[i].content;
+                    break;
+                }
             }
+            let searchQuery = text;
+            const isFollowUp = /mehr|weiter|und was|genauer|details|erzähl|nochmal|was ist damit|more|tell me more|go on|elaborate|and what|what about/i.test(lowerText);
+            if (isFollowUp && lastQuestion) searchQuery = `${text} ${lastQuestion}`;
+
+            const { context, images } = await fetchContext(searchQuery);
+
+            let finalPrompt;
+            if (activeSystemPrompt === TRAFKHOP_PROMPT) {
+                finalPrompt = context
+                ? `INTERNAL ARCHIVE DATA:\n${context}\n\nTASK: ${text}\n\nAnalyze the task based on the data.`
+                : `No direct archive entries found. Use your general understanding of the Triverse and the chat history for a creative assessment of: ${text}`;
+            } else {
+                finalPrompt = context
+                ? `Here are fragments from the Library:\n${context}\n\nAnswer the following question EXCLUSIVELY using information from these fragments - answer primarily based on the MAIN SOURCE. Other sources are supplementary only.\n\nQuestion: ${text}`
+                : text;
+            }
+
+            const reply = await queryGitHubModels(finalPrompt, text, activeSystemPrompt);
+            clearTimeout(wakeUpHint);
+            document.getElementById(loadingId)?.remove();
+
+            if (!reply) {
+                addMessage(currentBotName, '*clears throat* ... The memories are scattered today.');
+            } else {
+                addMessage(currentBotName, reply);
+            }
+
+            // Show images from wiki if found
+            if (images && images.length > 0) {
+                addImages(images);
+            }
+        } catch (e) {
+            clearTimeout(wakeUpHint);
+            document.getElementById(loadingId)?.remove();
+            addMessage(currentBotName, `*trembles slightly* ... The connection has been severed. (Error: ${e.message})`);
+            console.error(e);
         }
-        let searchQuery = text;
-        const isFollowUp = /mehr|weiter|und was|genauer|details|erzähl|nochmal|was ist damit|more|tell me more|go on|elaborate|and what|what about/i.test(lowerText);
-        if (isFollowUp && lastQuestion) searchQuery = `${text} ${lastQuestion}`;
-
-        const { context, images } = await fetchContext(searchQuery);
-
-        let finalPrompt;
-        if (activeSystemPrompt === TRAFKHOP_PROMPT) {
-            finalPrompt = context
-            ? `INTERNAL ARCHIVE DATA:\n${context}\n\nTASK: ${text}\n\nAnalyze the task based on the data.`
-            : `No direct archive entries found. Use your general understanding of the Triverse and the chat history for a creative assessment of: ${text}`;
-        } else {
-            finalPrompt = context
-            ? `Here are fragments from the Library:\n${context}\n\nAnswer the following question EXCLUSIVELY using information from these fragments - answer primarily based on the MAIN SOURCE. Other sources are supplementary only.\n\nQuestion: ${text}`
-            : text;
-        }
-
-        const reply = await queryGitHubModels(finalPrompt, text, activeSystemPrompt);
-        document.getElementById(loadingId)?.remove();
-
-        if (!reply) {
-            addMessage(currentBotName, '*clears throat* ... The memories are scattered today.');
-        } else {
-            addMessage(currentBotName, reply);
-        }
-
-        // Show images from wiki if found
-        if (images && images.length > 0) {
-            addImages(images);
-        }
-    } catch (e) {
-        document.getElementById(loadingId)?.remove();
-        addMessage(currentBotName, `*trembles slightly* ... The connection has been severed. (Error: ${e.message})`);
-        console.error(e);
-    }
 }
 
 // ================================
@@ -437,4 +478,5 @@ document.addEventListener('DOMContentLoaded', async function() {
 
         await loadSitemap();
         await buildSearchIndex();
+        wakeUpProxy(); // HF Space vorab aufwecken (fire-and-forget)
 });
