@@ -32,7 +32,7 @@ Die TRAFKBLASEN navs
 */
 
 .nav {
-    background-image: url("/SourceHop-Notes/assets/SourceHop-Images/TrafkSite/tb.png");
+    background-image: url("/SourceHop-Notes/assets/SourceHop-Images/ModelsJourney/TrafkBubbleNEWEST.png");
     width: 2.5rem;
     height: 2.5rem;
     background-repeat: no-repeat;
@@ -47,7 +47,7 @@ Die TRAFKBLASEN navs
     transition: 0.085s ease-in-out;
 }
 .nav:hover {
-    background-image: url("/SourceHop-Notes/assets/SourceHop-Images/TrafkSite/tbs.png");
+    background-image: url("/SourceHop-Notes/assets/SourceHop-Images/ModelsJourney/TrafkBubbleLighterNEWEST.png");
 }
 .nav a {
     text-decoration: none;

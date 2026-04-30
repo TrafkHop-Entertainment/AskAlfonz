@@ -34,6 +34,7 @@ main::before {
     top: 0; left: 0; right: 0; bottom: 0;
 
     background-image: url("SourceHop-Notes/assets/SourceHop-Images/ModelsJourney/13WorldsBG3.png");
+    background-color: transparent;
     background-repeat: no-repeat;
     background-position: center top;
     background-position-y: -5rem;
