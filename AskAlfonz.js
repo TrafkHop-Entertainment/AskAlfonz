@@ -438,3 +438,8 @@ document.addEventListener('DOMContentLoaded', async function() {
         await loadSitemap();
         await buildSearchIndex();
 });
+
+//Copyright © 2026 TrafkHop Entertainment™
+//All rights reserved.
+
+//MADE WITH AI
