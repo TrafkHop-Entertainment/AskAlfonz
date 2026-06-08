@@ -380,7 +380,7 @@ function buildFileContext() {
 // ================================
 // API AUFRUFE
 // ================================
-async function queryGitHubModels(finalPrompt, userText, currentSystemPrompt) {
+async function queryGitHubModels(finalPrompt, userText, currentSystemPrompt, retries = 2) {
     const historyWindow = chatHistory.slice(-6);
     const body = {
         messages: [
@@ -390,14 +390,49 @@ async function queryGitHubModels(finalPrompt, userText, currentSystemPrompt) {
         ]
     };
 
+    let lastError;
+    for (let attempt = 0; attempt <= retries; attempt++) {
+        try {
+            return await _doFetch(body, finalPrompt, userText);
+        } catch (e) {
+            lastError = e;
+            // Bei 503/502 (HF Space schläft) kurz warten und nochmal
+            if (attempt < retries && (e.message.includes('503') || e.message.includes('502') || e.message.includes('504'))) {
+                console.warn(`Proxy schläft, warte 3s... (Versuch ${attempt + 1}/${retries})`);
+                await new Promise(r => setTimeout(r, 3000));
+            } else {
+                break;
+            }
+        }
+    }
+    throw lastError;
+}
+
+async function _doFetch(body, finalPrompt, userText) {
     const response = await fetch(PROXY_URL, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(body)
     });
 
-    if (!response.ok) throw new Error("Verbindungsprobleme.");
-    const result = await response.json();
+    if (!response.ok) {
+        let errBody = '';
+        try { errBody = await response.text(); } catch {}
+        throw new Error(`HTTP ${response.status} vom Proxy: ${errBody.slice(0, 300)}`);
+    }
+
+    let result;
+    try {
+        result = await response.json();
+    } catch (jsonErr) {
+        throw new Error(`Proxy-Antwort kein gültiges JSON: ${jsonErr.message}`);
+    }
+
+    // Proxy gibt manchmal einen eigenen error-Key zurück
+    if (result?.error) {
+        throw new Error(`Proxy-Fehler: ${JSON.stringify(result.error).slice(0, 300)}`);
+    }
+
     const reply = result?.choices?.[0]?.message?.content || "";
 
     chatHistory.push({ role: "user", content: userText });
