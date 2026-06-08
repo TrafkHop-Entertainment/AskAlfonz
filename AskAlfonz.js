@@ -57,17 +57,22 @@ let activeSystemPrompt = SYSTEM_PROMPT;
 let currentBotName = 'Alfonz';
 
 // ----------------------------------------------------------------------
-// Nur .git Verzeichnisse ausschließen
+// Schließt unnötige System- und Medien-Dateien aus
 // ----------------------------------------------------------------------
 function shouldIndexUrl(url) {
     if (!url) return false;
     const lower = url.toLowerCase();
-    if (lower.includes('/.git/') || lower.includes('\\.git\\')) return false;
+    if (lower.includes('/.git/') || lower.includes('\\.git\\') || lower.includes('.idea') || lower.includes('.github')) return false;
+
+    // Vermeidet unnötige Downloads, die den Index und das Token-Limit sprengen
+    const badExts = ['.css', '.xml', '.sh', '.png', '.jpg', '.jpeg', '.json', '.yml', '.yaml', '.directory'];
+    if (badExts.some(ext => lower.endsWith(ext))) return false;
+
     return true;
 }
 
 // ----------------------------------------------------------------------
-// Sitemap laden (Prioritäten speichern)
+// Sitemap laden
 // ----------------------------------------------------------------------
 async function loadSitemap() {
     const sources = ['sitemap.xml'];
@@ -101,16 +106,14 @@ async function loadSitemap() {
 }
 
 // ----------------------------------------------------------------------
-// Datei-Inhalt holen (mit Logging)
+// Datei-Inhalt & Bilder extrahieren
 // ----------------------------------------------------------------------
 async function fetchFileContent(url) {
     try {
         const response = await fetch(encodeURI(url));
-        if (!response.ok) {
-            console.warn(`⚠️ ${response.status}: ${url}`);
-            return { flat: '', raw: '' };
-        }
+        if (!response.ok) return { flat: '', raw: '' };
         let text = await response.text();
+
         if (url.endsWith('.html')) {
             const parser = new DOMParser();
             const doc = parser.parseFromString(text, 'text/html');
@@ -118,52 +121,71 @@ async function fetchFileContent(url) {
             junk.forEach(el => el.remove());
             const contentNode = doc.querySelector('main') || doc.querySelector('.content') || doc.body;
             text = contentNode.innerText || contentNode.textContent;
+            const flat = text.replace(/\s+/g, ' ').trim().substring(0, 5000);
+            return { flat: `SOURCE: ${url}\nCONTENT: ${flat}`, raw: text };
+        } else {
+            const flat = text.replace(/\s+/g, ' ').trim().substring(0, 8000);
+            return { flat: `SOURCE: ${url}\nCONTENT: ${flat}`, raw: text };
         }
-        const flat = text.replace(/\s+/g, ' ').trim().substring(0, 8000);
-        return { flat: `SOURCE: ${url}\nCONTENT: ${flat}`, raw: text };
     } catch (e) {
-        console.error(`❌ Fetch-Error für ${url}:`, e);
         return { flat: '', raw: '' };
     }
 }
 
+function extractImagesFromRaw(rawText, docUrl) {
+    if (!rawText) return [];
+    const baseDir = docUrl.substring(0, docUrl.lastIndexOf('/') + 1);
+    const images = [];
+    const seen = new Set();
+    for (const m of rawText.matchAll(/!\[\[([^\]]+\.(png|jpg|jpeg|gif|webp|bmp|svg))\]\]/gi)) {
+        const filename = m[1].trim();
+        if (seen.has(filename)) continue;
+        seen.add(filename);
+        const beforeImg = rawText.substring(0, m.index);
+        const labelMatch = beforeImg.match(/####\s*picture description of:\s*(.+)\s*$/im);
+        const label = labelMatch ? labelMatch[1].trim() : filename.replace(/\.[^.]+$/, '');
+        images.push({ filename, url: baseDir + encodeURIComponent(filename), label });
+    }
+    return images;
+}
+
 // ----------------------------------------------------------------------
-// Index aufbauen (alle Sitemap-URLs)
+// Index aufbauen
 // ----------------------------------------------------------------------
 async function buildSearchIndex() {
-    console.log(`📚 Baue Index mit ${sitemapUrls.length} URLs auf...`);
-    const fetchPromises = sitemapUrls.map(async (url) => {
+    const relevantUrls = sitemapUrls.filter(shouldIndexUrl);
+    console.log(`📚 Baue Index mit ${relevantUrls.length} URLs auf...`);
+    const fetchPromises = relevantUrls.map(async (url) => {
         const { flat, raw } = await fetchFileContent(url);
         if (!flat) return null;
         const priority = urlPriorityMap.get(url) || 0.65;
         return {
             url,
             text: flat.replace(/^SOURCE:.*?\nCONTENT:/, '').toLowerCase(),
-                                          rawText: raw,
-                                          isBackup: /\/backups?\//i.test(url) || /\/old\//i.test(url),
-                                          isGameIdea: /\/gameideas\//i.test(url),
-                                          priority: priority
+                                           rawText: raw,
+                                           images: url.endsWith('.md') && raw ? extractImagesFromRaw(raw, url) : [],
+                                           isBackup: /\/backups?\//i.test(url) || /\/old\//i.test(url),
+                                           isGameIdea: /\/gameideas\//i.test(url) || /spieleideen/i.test(url),
+                                           priority: priority
         };
     });
     const results = await Promise.all(fetchPromises);
     searchIndex = results.filter(Boolean);
     indexReady = true;
-    console.log(`✅ Index fertig: ${searchIndex.length} Dokumente (von ${sitemapUrls.length} URLs)`);
+    console.log(`✅ Index fertig: ${searchIndex.length} Dokumente relevant.`);
 }
 
 // ----------------------------------------------------------------------
-// Kontextsuche: maximale Treffer, keine willkürlichen Limits
+// Kontextsuche (Repariert: Token-Limits und Prioritäten-Bug)
 // ----------------------------------------------------------------------
 async function fetchContext(userMessage) {
-    if (!indexReady) return { context: '' };
+    if (!indexReady) return { context: '', images: [] };
     const msgLower = userMessage.toLowerCase();
-    const wantsBackup = /backup|earlier|old version|difference|back then|used to be/i.test(msgLower);
-    const wantsIdeas  = /idea|ideas|concept|game.?idea|planned|someday|maybe someday/i.test(msgLower);
+    const wantsBackup = /backup|earlier|old version|difference|back then|used to be|alte/i.test(msgLower);
+    const wantsIdeas  = /idea|ideen|idee|concept|game.?idea|planned|someday|maybe someday/i.test(msgLower);
     const words = msgLower.split(/\W+/).filter(w => w.length > 2);
 
-    // Exakte Dateinamen (z.B. "main.c", "TrafkCalc.c")
     const explicitFilename = msgLower.match(/[\w\-äöüß]+\.(c|cpp|h|html|md|txt|js|css|py|sh)/i);
-    // Exakte Pfade (z.B. "projects/TrafkCalc")
     const explicitPath = msgLower.match(/(?:^|\s)([\w\-\/]+\/[\w\-\/\.]+)/i);
 
     const scored = searchIndex.map(doc => {
@@ -172,60 +194,77 @@ async function fetchContext(userMessage) {
         if (doc.isGameIdea && !wantsIdeas) return { doc, score: -1 };
 
         let score = 0;
+        let matched = false;
 
-        // Exakte Dateinamen: sehr hoher Boost
+        // Dateinamen / Pfad Boost
         if (explicitFilename) {
             const fname = explicitFilename[0].toLowerCase();
-            if (urlLower.endsWith('/' + fname) || urlLower.endsWith(fname)) score += 500;
+            if (urlLower.endsWith('/' + fname) || urlLower.endsWith(fname)) { score += 500; matched = true; }
         }
-        // Pfad-Boost
         if (explicitPath) {
             const pathPart = explicitPath[1].toLowerCase();
-            if (urlLower.includes(pathPart)) score += 200;
+            if (urlLower.includes(pathPart)) { score += 200; matched = true; }
         }
 
-        // Wortmatches im Text
+        // Wortmatches
         words.forEach(word => {
             const wordCount = (doc.text.match(new RegExp(word.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'g')) || []).length;
-            score += Math.min(wordCount * 10, 100);
-            if (word.length > 3 && doc.text.includes(word.substring(0, 3))) score += 5;
+            if (wordCount > 0) {
+                score += Math.min(wordCount * 10, 100);
+                matched = true;
+            }
+            if (word.length > 3 && doc.text.includes(word.substring(0, 3))) { score += 5; matched = true; }
         });
 
-            // URL-Segment-Matches (z.B. "trafkcalc" in path)
-            const urlSegments = urlLower.split(/[\/\.\-_;]/).filter(s => s.length > 2);
-            words.forEach(word => {
-                if (urlSegments.some(seg => seg === word)) score += 80;
-                if (urlSegments.some(seg => seg.includes(word) || (word.length > 3 && word.includes(seg)))) score += 30;
-            });
+        // URL Segmente
+        const urlSegments = urlLower.split(/[\/\.\-_;]/).filter(s => s.length > 2);
+        words.forEach(word => {
+            if (urlSegments.some(seg => seg === word)) { score += 80; matched = true; }
+            if (urlSegments.some(seg => seg.includes(word) || (word.length > 3 && word.includes(seg)))) { score += 30; matched = true; }
+        });
 
-                // Priorität aus Sitemap (0-85 Punkte)
-                score += doc.priority * 100;
-                return { doc, score };
+        // FIX: Priorität NUR bei echtem Thementreffer aufaddieren!
+        if (matched) {
+            score += doc.priority * 100;
+        } else {
+            score = 0; // Kein Treffer = fliegt raus
+        }
+        return { doc, score };
     });
 
-    // Alle Dokumente mit Score > 0 nehmen, aber auf max 30 begrenzen, um Token-Limit nicht zu sprengen
-    let topDocs = scored.filter(x => x.score > 0).sort((a, b) => b.score - a.score).slice(0, 30).map(x => x.doc);
+    // FIX: Maximal 6 Dokumente statt 30, um Proxy 413 Fehler zu vermeiden!
+    let topDocs = scored.filter(x => x.score > 0).sort((a, b) => b.score - a.score).slice(0, 6).map(x => x.doc);
+
     if (topDocs.length === 0) {
         console.log("Keine Text-Matches, verwende Fallback (höchste Priorität)");
-        topDocs = [...searchIndex].sort((a, b) => b.priority - a.priority).slice(0, 10);
+        topDocs = [...searchIndex].sort((a, b) => b.priority - a.priority).slice(0, 3);
     }
-    if (topDocs.length === 0) return { context: '' };
+    if (topDocs.length === 0) return { context: '', images: [] };
 
-    // Logge die gefundenen relevanten URLs für Debugging
-    console.log(`🔍 Relevante Dokumente für "${userMessage}":`, topDocs.map(d => d.url));
-
-    const context = topDocs.map((d, i) => {
+    let context = topDocs.map((d, i) => {
         const label = i === 0 ? `[MAIN SOURCE]\nSOURCE: ${d.url}` : `SOURCE: ${d.url}`;
         const ideaTag = d.isGameIdea ? '\n[NOTE: This is a GAME IDEA / CONCEPT — NOT a current or released project]' : '';
         const backupTag = d.isBackup ? '\n[NOTE: This is BACKUP / ARCHIVE content — may be outdated]' : '';
-        return `${label}${ideaTag}${backupTag}\nCONTENT: ${d.text.substring(0, 4000)}`;
+        return `${label}${ideaTag}${backupTag}\nCONTENT: ${d.text.substring(0, 3000)}`;
     }).join('\n\n---\n\n');
 
-    return { context };
+    // Bilder sammeln
+    const seenImages = new Set();
+    const images = [];
+    for (const doc of topDocs) {
+        for (const img of (doc.images || [])) {
+            if (!seenImages.has(img.filename)) {
+                seenImages.add(img.filename);
+                images.push(img);
+            }
+        }
+    }
+
+    return { context, images };
 }
 
 // ----------------------------------------------------------------------
-// File Attachment UI (unverändert)
+// File Attachment UI
 // ----------------------------------------------------------------------
 function buildFileAttachmentUI() {
     const row = document.getElementById('chat-input-row');
@@ -312,7 +351,7 @@ function buildUserContent(promptText, files) {
 }
 
 // ----------------------------------------------------------------------
-// API-Aufruf mit Retry
+// API-Aufruf
 // ----------------------------------------------------------------------
 async function queryGitHubModels(finalPrompt, userText, currentSystemPrompt, pendingFiles = [], retries = 2) {
     const historyWindow = chatHistory.slice(-6);
@@ -350,7 +389,7 @@ async function _doFetch(body, userText) {
 }
 
 // ----------------------------------------------------------------------
-// UI-Nachrichten
+// UI-Nachrichten & Bilder
 // ----------------------------------------------------------------------
 function addMessage(sender, text) {
     const msgDiv = document.createElement('div');
@@ -373,6 +412,35 @@ function addMessage(sender, text) {
     chatWindow.scrollTop = chatWindow.scrollHeight;
 }
 
+function addImages(images) {
+    const container = document.createElement('div');
+    container.style.cssText = 'margin-bottom:15px; display:flex; flex-wrap:wrap; gap:10px;';
+
+    images.forEach(img => {
+        const wrapper = document.createElement('div');
+        wrapper.style.cssText = 'display:flex; flex-direction:column; align-items:center; max-width:280px;';
+
+        const imgEl = document.createElement('img');
+        imgEl.src = img.url;
+        imgEl.alt = img.label;
+        imgEl.title = img.label;
+        imgEl.style.cssText = `max-width: 280px; max-height: 220px; border-radius: 6px; border: 1px solid #5a3998; cursor: pointer; object-fit: contain; background: #1a0a2e;`;
+        imgEl.addEventListener('click', () => window.open(img.url, '_blank'));
+        imgEl.addEventListener('error', () => { wrapper.style.display = 'none'; });
+
+        const caption = document.createElement('p');
+        caption.textContent = img.label;
+        caption.style.cssText = 'font-size:11px; color:#9069da; margin:4px 0 0; text-align:center;';
+
+        wrapper.appendChild(imgEl);
+        wrapper.appendChild(caption);
+        container.appendChild(wrapper);
+    });
+
+    chatWindow.appendChild(container);
+    chatWindow.scrollTop = chatWindow.scrollHeight;
+}
+
 // ----------------------------------------------------------------------
 // Senden der Nachricht
 // ----------------------------------------------------------------------
@@ -381,6 +449,7 @@ async function sendMessage() {
     if (!text && attachedFiles.length === 0) return;
     if (!text) text = '(file attached)';
     const lowerText = text.toLowerCase();
+
     if (lowerText.startsWith('@trafkhop')) {
         activeSystemPrompt = TRAFKHOP_PROMPT;
         currentBotName = 'Trafkhop';
@@ -392,34 +461,44 @@ async function sendMessage() {
         text = text.replace(/^@alfonz\s*/i, '').trim();
         if (!text && attachedFiles.length === 0) { addMessage('System', 'Mode switched. You are now talking to Alfonz again.'); inputField.value = ''; return; }
     }
+
     addMessage('Traveler', text);
     inputField.value = '';
     const pendingFiles = [...attachedFiles];
     attachedFiles = [];
     renderFilePreviews();
+
     const loadingId = 'loading-' + Date.now();
     const loadingDiv = document.createElement('div');
     loadingDiv.id = loadingId;
     loadingDiv.innerHTML = `<b style="color:#9069da;">${currentBotName}:</b> <p><em>...searching the faded pages...</em></p>`;
     chatWindow.appendChild(loadingDiv);
     chatWindow.scrollTop = chatWindow.scrollHeight;
+
     try {
         let lastQuestion = "";
         for (let i = chatHistory.length-1; i>=0; i--) if (chatHistory[i].role === "user") { lastQuestion = chatHistory[i].content; break; }
         let searchQuery = text;
-        const isFollowUp = /more|tell me more|go on|elaborate|and what|what about/i.test(lowerText);
+        const isFollowUp = /more|tell me more|go on|elaborate|and what|what about|mehr|genauer/i.test(lowerText);
         if (isFollowUp && lastQuestion) searchQuery = `${text} ${lastQuestion}`;
-        const { context } = await fetchContext(searchQuery);
+
+        const { context, images } = await fetchContext(searchQuery);
         let finalPromptText;
+
         if (activeSystemPrompt === TRAFKHOP_PROMPT) {
             finalPromptText = context ? `INTERNAL ARCHIVE DATA:\n${context}\n\nTASK: ${text}` : `No direct archive entries found. Use your general understanding of the Triverse and the chat history.\n\nTASK: ${text}`;
         } else {
             finalPromptText = context ? `Here are fragments from the Library:\n${context}\n\nAnswer the following question EXCLUSIVELY using information from these fragments - primarily the MAIN SOURCE.\n\nQuestion: ${text}` : text;
         }
+
         const reply = await queryGitHubModels(finalPromptText, text, activeSystemPrompt, pendingFiles);
         document.getElementById(loadingId)?.remove();
+
         if (!reply) addMessage(currentBotName, '*clears throat* ... The memories are scattered today.');
         else addMessage(currentBotName, reply);
+
+        if (images && images.length > 0) addImages(images);
+
     } catch (e) {
         document.getElementById(loadingId)?.remove();
         addMessage(currentBotName, `*trembles slightly* ... The connection has been severed. (Error: ${e.message})`);
@@ -445,7 +524,3 @@ document.addEventListener('DOMContentLoaded', async function() {
     await loadSitemap();
     await buildSearchIndex();
 });
-
-// Copyright (c) 2026 TrafkHop Entertainment(TM)
-// All rights reserved.
-// MADE WITH AI
