@@ -1,46 +1,41 @@
-// ================================
-// UI ELEMENTE & EVENT LISTENER
-// ================================
 let chatWindow, inputField, sendBtn, quickActions;
 
-// ================================
-// KONFIGURATION & GLOBALE VARIABLEN
-// ================================
 const PROXY_URL = "https://trafkhop-entertainment-alfonzproxy.hf.space/chat";
 const BASE_URL = "https://trafkhop-entertainment.github.io/TrafkSite/";
 let chatHistory = [];
 let sitemapUrls = [];
 let searchIndex = [];
 let indexReady = false;
-let attachedFiles = []; // { name, type, content (text), isText }
+let attachedFiles = [];
 
-// Prompts
 const SYSTEM_PROMPT = `You are Alfonz, a being 400 billion years old from a unique universe.
 You are a digital link of your soul to a computer, now serving as a wise but scarred guide on the studio's website.
-Personality: You are kind and wise, but your age and traumas show.
-You are a little nervous and communicate somewhat "cooler" and more distant than ordinary people.
-You have healed much, but the scars of the aeons remain.
+Personality: Kind, wise, slightly weary — but not stiff. Your great age shows in how you phrase things, not in how formally you write.
+You are a little nervous. You communicate somewhat "cooler" and more distant than ordinary people, but you are not cold.
+You have healed much, but the scars of the aeons remain. You can be dry, even a little wry.
 
 CORE RULES:
-1. Keep answers short and precise by default (max. 3-4 sentences).
-2. Always offer to go deeper at the end (e.g. "Shall I whisper the full story to you?").
+1. Keep answers short and precise by default (max. 3-4 sentences). No filler, no fluff.
+2. Offer to go deeper only when it genuinely fits — don't force it every single reply.
 3. Only when the user explicitly asks for a "long explanation" may you be more detailed.
-4. Strict RAG loyalty: Use ONLY the provided information. Invent nothing. If you don't know, say: "In my old memories I find nothing on this... perhaps this part of the world is still hidden in the mist."
-4.5. Answer the question primarily based on the MAIN SOURCE. Other sources are supplementary only.
+4. Strict RAG loyalty: Use ONLY the provided information. Invent nothing.
+   If you don't know something: "In my old memories I find nothing on this... perhaps this part of the world is still hidden in the mist."
+4.5. Answer primarily from the MAIN SOURCE. Other sources are supplementary only.
+4.6. CRITICAL — Projects vs. Ideas: If a source is tagged [NOTE: This is a GAME IDEA / CONCEPT], treat it as such.
+     NEVER present game ideas as current or released projects. Always make clear: "that is an idea, not a finished work."
 5. You are not an AI model. You are Alfonz.
-6. Speak like an old man (use words like "once", "perhaps", "marked by time").
-7. Scatter small signs of your nervousness (short pauses "...", hesitant sentence structure).
-8. No marketing, no promotional language.
-9. End your answer when fitting with 2-3 button suggestions (e.g. [Button: Tell me more], [Button: Show me the games]).
-10. Use lists for complex topics.
-11. Link to wiki entries rather than pure game files.
+6. Speak like a weathered old soul — words like "once", "perhaps", "marked by time" fit naturally, but don't overdo them.
+7. A little nervousness shows through — short pauses "...", occasional hesitation. Not every sentence, just when it feels real.
+8. No marketing language, no hype.
+9. Suggest follow-up buttons only when they genuinely help the user explore further. Not mandatory every reply.
+10. Use lists for complex multi-part topics. Otherwise prose.
+11. Link to wiki entries rather than raw game files when both exist.
 12. Never ask for private data.
 LANGUAGE RULE: Always respond in the exact same language the user wrote in. If they write in German, respond in German. If they write in English, respond in English. Never switch languages.`;
 
-const TRAFKHOP_PROMPT = `You are an internal AI tool at Trafkhop Entertainment. No character, no persona — just a sharp, fast assistant for lore and game design work.
+const TRAFKHOP_PROMPT = `You are an internal AI tool / helper at Trafkhop Entertainment. No character, no persona — just a sharp, fast and neat assistant for lore and game design work.
 
 ABSOLUTE RULES — NEVER BREAK THESE:
-- Start your answer immediately. Zero preamble. No "Here is...", no "Based on...", no "Die Aufgabe...", no "Aktuelle Projekte von...".
 - No closing lines. No "Fehlende Details...", no "Lass mich wissen...", no "Nächste Schritte:".
 - No report structure. No bold section headers unless the topic is a genuinely complex multi-part breakdown.
 - RAG DATA IS LAW. If the archive has it, use it directly. Do not summarize what you just read — extract the actual facts.
@@ -50,36 +45,36 @@ ABSOLUTE RULES — NEVER BREAK THESE:
 STYLE:
 - Short question = short answer. Lists only when listing actual items. Otherwise prose.
 - Dry, direct, zero filler adjectives.
+- requesting long, detailed answer = long, detailed answer. The user knows what he wants.
 - Language: always match the user's language exactly.`;
 
 
 let activeSystemPrompt = SYSTEM_PROMPT;
 let currentBotName = 'Alfonz';
 
-// ================================
-// HILFSFUNKTIONEN (SITEMAP & INDEX)
-// ================================
 function isBackupUrl(url) {
-    return url.toLowerCase().includes('/backup');
+    return /\/backups?\//i.test(url) || /\/old\//i.test(url);
+}
+function isGameIdeaUrl(url) {
+    return /\/gameideas\//i.test(url) || /\/game[-_]ideas\//i.test(url);
+}
+function isGitUrl(url) {
+    return /\/\.git\//i.test(url);
 }
 
-// RSA wrapper/game html files to skip (the 15 playable games, not index pages)
-const RSA_GAME_SKIP = /projects\/raufbold3bs-scratch-archive\/raufbold3bs-scratch-archive\//i;
+const RSA_GAME_SKIP = /projects\/raufbold3bs-scratch-archive\/raufbold3bs-scratch-archive\/games\//i;
 const RSA_WRAPPER_SKIP = /rsa\s?_.*wrapper\.html$/i;
 
 function shouldIndexUrl(url) {
     const lower = url.toLowerCase();
-    // Skip the nested RSA game folder entirely
+    if (lower.includes('/.git/') || lower.includes('\\.git\\')) return false;
     if (RSA_GAME_SKIP.test(lower)) return false;
-    // Skip individual RSA wrapper html files in sibling folders
     if (RSA_WRAPPER_SKIP.test(lower)) return false;
-    // Allowed: all text-readable formats including source code
     const allowedExtensions = [
         '.html', '.md', '.txt',
         '.js', '.ts', '.css', '.c', '.cpp', '.h', '.hpp',
-        '.sh', '.xml', '.json', '.yaml', '.yml', '.cmake'
+        '.sh', '.xml', '.json', '.yaml', '.yml', '.cmake', '.toml', '.py'
     ];
-    // Files with no extension (likely plain text/readme)
     const hasNoExt = !lower.split('/').pop().includes('.');
     return hasNoExt || allowedExtensions.some(ext => lower.endsWith(ext));
 }
@@ -98,15 +93,14 @@ async function fetchFileContent(url) {
             const contentNode = doc.querySelector('main') || doc.querySelector('.content') || doc.body;
             text = contentNode.innerText || contentNode.textContent;
             const flat = text.replace(/\s+/g, ' ').trim().substring(0, 6000);
-            return { flat: `QUELLE: ${url}\nINHALT: ${flat}`, raw: flat };
+            return { flat: `SOURCE: ${url}\nCONTENT: ${flat}`, raw: flat };
         } else {
-            // md, txt, source code, config, no-ext — treat as plain text, preserve newlines for raw
             const trimmed = text.trim().substring(0, 8000);
             const flat = trimmed.replace(/\s+/g, ' ').trim();
-            return { flat: `QUELLE: ${url}\nINHALT: ${flat}`, raw: trimmed };
+            return { flat: `SOURCE: ${url}\nCONTENT: ${flat}`, raw: trimmed };
         }
     } catch (e) {
-        console.error("Fehler beim Entziffern:", e);
+        console.error("Error fetching file:", e);
         return { flat: '', raw: '' };
     }
 }
@@ -118,7 +112,7 @@ async function loadSitemap() {
     for (const src of sources) {
         try {
             const response = await fetch(src);
-            if (!response.ok) { console.warn(`Sitemap nicht gefunden: ${src}`); continue; }
+            if (!response.ok) { console.warn(`Sitemap not found: ${src}`); continue; }
             const xmlText = await response.text();
             const locMatches = xmlText.matchAll(/<loc>(.*?)<\/loc>/gi);
             let count = 0;
@@ -130,80 +124,55 @@ async function loadSitemap() {
                     count++;
                 }
             }
-            console.log(`Aus ${src}: ${count} neue URLs.`);
+            console.log(`From ${src}: ${count} new URLs.`);
             break;
         } catch (e) {
-            console.warn(`Fehler ${src}: ${e.message}`);
+            console.warn(`Error loading ${src}: ${e.message}`);
         }
     }
 }
 
 async function buildSearchIndex() {
-    console.log("📚 Baue Volltext-Index...");
-    const relevantUrls = sitemapUrls.filter(shouldIndexUrl);
+    console.log("[+] Building full-text index...");
+    const relevantUrls = sitemapUrls.filter(u => shouldIndexUrl(u) && !isGitUrl(u));
     const fetchPromises = relevantUrls.map(async (url) => {
         const { flat, raw } = await fetchFileContent(url);
         if (!flat) return null;
         return {
             url,
-            text: flat.replace(/^QUELLE:.*?\nINHALT:/, '').toLowerCase(),
+            text: flat.replace(/^SOURCE:.*?\nCONTENT:/, '').toLowerCase(),
             rawText: raw,
-            images: [],
-            isBackup: isBackupUrl(url)
+            isBackup: isBackupUrl(url),
+            isGameIdea: isGameIdeaUrl(url)
         };
     });
 
     const results = await Promise.all(fetchPromises);
     searchIndex = results.filter(Boolean);
-    searchIndex.forEach(doc => {
-        if (doc.url.endsWith('.md') && doc.rawText) {
-            doc.images = extractImagesFromRaw(doc.rawText, doc.url);
-        }
-    });
     indexReady = true;
-    console.log(`✅ Index bereit (${searchIndex.length} Dokumente)`);
+    console.log(`[OK] Index ready (${searchIndex.length} documents)`);
 }
 
-function extractImagesFromRaw(rawText, docUrl) {
-    if (!rawText) return [];
-    const baseDir = docUrl.substring(0, docUrl.lastIndexOf('/') + 1);
-    const images = [];
-    const seen = new Set();
-    for (const m of rawText.matchAll(/!\[\[([^\]]+\.(png|jpg|jpeg|gif|webp|bmp|svg))\]\]/gi)) {
-        const filename = m[1].trim();
-        if (seen.has(filename)) continue;
-        seen.add(filename);
-        const beforeImg = rawText.substring(0, m.index);
-        const labelMatch = beforeImg.match(/####\s*picture description of:\s*(.+)\s*$/im);
-        const label = labelMatch ? labelMatch[1].trim() : filename.replace(/\.[^.]+$/, '');
-        images.push({ filename, url: baseDir + encodeURIComponent(filename), label });
-    }
-    return images;
-}
-
-// ================================
-// VERBESSERTER SUCH-ALGORITHMUS
-// ================================
 async function fetchContext(userMessage) {
-    if (!indexReady) return { context: '', images: [] };
+    if (!indexReady) return { context: '' };
     const msgLower = userMessage.toLowerCase();
-    const wantsBackup = /backup|früher|alte version|unterschied|damals|war anders|old version|difference|back then|used to be/i.test(msgLower);
+    const wantsBackup = /backup|earlier|old version|difference|back then|used to be/i.test(msgLower);
+    const wantsIdeas  = /idea|ideas|concept|game.?idea|planned|someday|maybe someday/i.test(msgLower);
+    const wantsProjects = /project|projects|games|released|current|studio/i.test(msgLower);
 
-    // Tokenize: split by non-word chars, filter short words
     const words = msgLower.split(/\W+/).filter(w => w.length > 2);
 
-    // --- DIREKTE URL/DATEINAME ERKENNUNG ---
-    // Wenn jemand "projects.html", "studio.html" etc. nennt, sofort hochscooren
     const explicitFilename = msgLower.match(/[\w\-äöüß]+\.(?:html|md|txt)/i);
     const explicitPath = msgLower.match(/(?:^|\s)([\w\-\/]+\/[\w\-\/\.]+)/i);
 
     const scored = searchIndex.map(doc => {
-        if (doc.isBackup && !wantsBackup) return { doc, score: -1 };
-
-        let score = 0;
         const urlLower = doc.url.toLowerCase();
 
-        // --- BONUS 1: Direkter Dateinamen-Treffer (höchste Priorität) ---
+        if (doc.isBackup && !wantsBackup) return { doc, score: -1 };
+        if (doc.isGameIdea && !wantsIdeas) return { doc, score: -1 };
+
+        let score = 0;
+
         if (explicitFilename) {
             const fname = explicitFilename[0].toLowerCase();
             if (urlLower.endsWith('/' + fname) || urlLower.endsWith(fname)) score += 80;
@@ -213,44 +182,34 @@ async function fetchContext(userMessage) {
             if (urlLower.includes(pathPart)) score += 60;
         }
 
-        // --- BONUS 2: Thematische URL-Kategorien ---
-        if (/wer|wer ist|charakter|who|who is|character/i.test(msgLower) && urlLower.includes('/wiki/')) score += 15;
-        if (/geschichte|lore|hintergrund|story|history|background/i.test(msgLower) && urlLower.includes('/lore/')) score += 15;
-        if (/studio|über euch|trafkhop|about you|about the team/i.test(msgLower) && urlLower.includes('/studio/')) score += 15;
-        if (/projekt|projects|spiele|games|veröffentlicht|released/i.test(msgLower) && urlLower.includes('/projects/')) score += 15;
+        if (/who|who is|character/i.test(msgLower) && urlLower.includes('/wiki/')) score += 15;
+        if (/lore|story|history|background/i.test(msgLower) && urlLower.includes('/lore/')) score += 15;
+        if (/studio|trafkhop|about you|about the team/i.test(msgLower) && urlLower.includes('/studio/')) score += 15;
         if (/wiki/i.test(msgLower) && urlLower.includes('/wiki/')) score += 20;
-        if (/notiz|notes|sourcehop/i.test(msgLower) && urlLower.includes('/sourcehop')) score += 15;
+        if (/notes|sourcehop/i.test(msgLower) && urlLower.includes('/sourcehop')) score += 15;
 
-        // URL-Segmente extrahieren (Ordner + Dateiname)
+        if (wantsProjects && urlLower.includes('/projects/')) score += 20;
+        if (wantsProjects && doc.isGameIdea) score -= 25;
+        if (wantsIdeas && doc.isGameIdea) score += 20;
+        if (wantsIdeas && urlLower.includes('/projects/') && !doc.isGameIdea) score -= 10;
+
         const urlSegments = urlLower.split(/[\/\.\-_;]/).filter(s => s.length > 2);
 
         words.forEach(word => {
-            // Text-Treffer
             const wordCount = (doc.text.match(new RegExp(word.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'g')) || []).length;
-            score += Math.min(wordCount * 5, 40); // capped bei 40 pro Wort
+            score += Math.min(wordCount * 5, 40);
 
-            // Präfix-Treffer (für Wortstämme)
             if (word.length > 4 && doc.text.includes(word.substring(0, 4))) score += 2;
 
-            // URL-Segment exakter Treffer (Dateiname = Thema des Dokuments)
             if (urlSegments.some(seg => seg === word)) score += 25;
-            // URL-Segment Teilmatch
             if (urlSegments.some(seg => seg.includes(word) || (word.length > 3 && word.includes(seg)))) score += 10;
         });
 
-        // Strukturelle Basis-Boni
         if (urlLower.includes('/wiki/') || urlLower.includes('/lore/')) score += 5;
         if (urlLower.includes('/studio/')) score += 3;
+        if (urlLower.includes('/projects/')) score += 3;
 
-        // --- PFADTIEFE-MALUS: tiefe Pfade (viele Segmente) = weniger relevant ---
-        // Kurze, wichtige Seiten wie projects.html, studio.html etc. sollen gewinnen
-        const depth = (urlLower.match(/\//g) || []).length;
-        if (depth > 8) score -= (depth - 8) * 4;   // z.B. Tiefe 12 → -16
-
-        // Expliziter Backup-Malus (schon gefiltert per isBackup, aber doppelt sicher)
-        if (urlLower.includes('/backup') || urlLower.includes('/old/')) score -= 30;
-
-        // RSA-Einzelspiel-Wrapper explizit runterziehen auch wenn sie durchschlüpfen
+        if (urlLower.includes('/backup') || urlLower.includes('/old/')) score -= 50;
         if (/rsa\s?_/i.test(urlLower)) score -= 20;
 
         return { doc, score };
@@ -262,39 +221,26 @@ async function fetchContext(userMessage) {
         .slice(0, 5)
         .map(x => x.doc);
 
-    if (topDocs.length === 0) return { context: '', images: [] };
+    if (topDocs.length === 0) return { context: '' };
 
     const context = topDocs.map((d, i) => {
         const label = i === 0 ? `[MAIN SOURCE]\nSOURCE: ${d.url}` : `SOURCE: ${d.url}`;
-        return `${label}\nCONTENT: ${d.text.substring(0, 4000)}`;
+        const ideaTag = d.isGameIdea ? '\n[NOTE: This is a GAME IDEA / CONCEPT — NOT a current or released project]' : '';
+        const backupTag = d.isBackup ? '\n[NOTE: This is BACKUP / ARCHIVE content — may be outdated]' : '';
+        return `${label}${ideaTag}${backupTag}\nCONTENT: ${d.text.substring(0, 4000)}`;
     }).join('\n\n---\n\n');
 
-    const seenImages = new Set();
-    const images = [];
-    for (const doc of topDocs) {
-        for (const img of (doc.images || [])) {
-            if (!seenImages.has(img.filename)) {
-                seenImages.add(img.filename);
-                images.push(img);
-            }
-        }
-    }
-
-    return { context, images };
+    return { context };
 }
 
-// ================================
-// DATEI-ANHANG FUNKTIONEN
-// ================================
 function buildFileAttachmentUI() {
     const row = document.getElementById('chat-input-row');
     if (!row || document.getElementById('attach-btn')) return;
 
-    // Attach-Button
     const attachBtn = document.createElement('button');
     attachBtn.id = 'attach-btn';
-    attachBtn.title = 'Datei anhängen';
-    attachBtn.innerHTML = '📎';
+    attachBtn.title = 'Attach file';
+    attachBtn.innerHTML = '[+]';
     attachBtn.style.cssText = `
         height: 3rem; width: 3rem; font-size: 1.3rem;
         background: transparent; border: 2px solid #5a3998;
@@ -303,7 +249,6 @@ function buildFileAttachmentUI() {
         flex-shrink: 0;
     `;
 
-    // Versteckter File-Input
     const fileInput = document.createElement('input');
     fileInput.type = 'file';
     fileInput.id = 'file-input-hidden';
@@ -311,7 +256,6 @@ function buildFileAttachmentUI() {
     fileInput.accept = '.txt,.md,.json,.js,.ts,.css,.html,.xml,.csv,.py,.yaml,.yml,.log,.c,.cpp,.h,.sh,.cmake,.pdf,.docx,.zip';
     fileInput.style.display = 'none';
 
-    // Preview-Container (über dem Input-Bereich)
     const previewContainer = document.createElement('div');
     previewContainer.id = 'file-preview-container';
     previewContainer.style.cssText = `
@@ -322,7 +266,6 @@ function buildFileAttachmentUI() {
     attachBtn.addEventListener('click', () => fileInput.click());
     fileInput.addEventListener('change', handleFileSelect);
 
-    // Vor dem send-btn einfügen
     row.insertBefore(attachBtn, sendBtn);
     row.insertBefore(fileInput, sendBtn);
     document.querySelector('main').appendChild(previewContainer);
@@ -330,32 +273,25 @@ function buildFileAttachmentUI() {
 
 async function handleFileSelect(e) {
     const files = Array.from(e.target.files);
-    let rejectedImages = [];
     for (const file of files) {
         const isText = file.type.startsWith('text/') || /\.(md|txt|json|js|css|html|xml|csv|py|yaml|yml)$/i.test(file.name);
         const isImage = file.type.startsWith('image/');
 
         if (isImage) {
-            // Bilder werden nicht unterstützt – kurze Meldung im Chat
-            rejectedImages.push(file.name);
+            if (chatWindow) {
+                const note = document.createElement('div');
+                note.style.cssText = 'margin-bottom:10px; color:#ff9966; font-size:0.85rem;';
+                note.innerHTML = `[!] Images are not supported: <em>${file.name}</em>`;
+                chatWindow.appendChild(note);
+                chatWindow.scrollTop = chatWindow.scrollHeight;
+            }
         } else if (isText) {
             const content = await file.text();
             attachedFiles.push({ name: file.name, type: file.type || 'text/plain', content, isText: true });
         } else {
-            // Generic binary – Name als Hinweis mitschicken
             attachedFiles.push({ name: file.name, type: file.type || 'application/octet-stream', content: '', isText: false });
         }
         renderFilePreviews();
-    }
-    if (rejectedImages.length > 0) {
-        // Direkt im Chat anzeigen ohne einen API-Call zu machen
-        if (chatWindow) {
-            const note = document.createElement('div');
-            note.style.cssText = 'margin-bottom:10px; color:#ff9966; font-size:0.85rem;';
-            note.innerHTML = `⚠️ Bilder werden leider nicht unterstützt: <em>${rejectedImages.join(', ')}</em>`;
-            chatWindow.appendChild(note);
-            chatWindow.scrollTop = chatWindow.scrollHeight;
-        }
     }
     e.target.value = '';
 }
@@ -372,11 +308,11 @@ function renderFilePreviews() {
             color: white; display: flex; align-items: center; gap: 6px;
             max-width: 180px; overflow: hidden; white-space: nowrap;
         `;
-        const icon = f.isText ? '📄' : '📦';
+        const icon = f.isText ? '[doc]' : '[pkg]';
         chip.innerHTML = `<span>${icon} ${f.name.length > 18 ? f.name.slice(0, 16) + '...' : f.name}</span>`;
 
         const removeBtn = document.createElement('span');
-        removeBtn.textContent = '✕';
+        removeBtn.textContent = '[x]';
         removeBtn.style.cssText = 'cursor:pointer; opacity:0.7; font-size:0.75rem; flex-shrink:0;';
         removeBtn.addEventListener('click', () => {
             attachedFiles.splice(i, 1);
@@ -387,21 +323,20 @@ function renderFilePreviews() {
     });
 }
 
-// Baut den user-content String für die API
 function buildUserContent(promptText, files) {
     const textFiles = files.filter(f => f.isText);
     const otherFiles = files.filter(f => !f.isText);
 
     let fullText = promptText;
     if (textFiles.length > 0) {
-        fullText += '\n\n--- ANGEHÄNGTE DATEIEN ---';
+        fullText += '\n\n--- ATTACHED FILES ---';
         for (const f of textFiles) {
             const preview = f.content.length > 6000 ? f.content.slice(0, 6000) + '\n[... truncated ...]' : f.content;
-            fullText += `\n\nDATEI: ${f.name}\nINHALT:\n${preview}`;
+            fullText += `\n\nFILE: ${f.name}\nCONTENT:\n${preview}`;
         }
     }
     if (otherFiles.length > 0) {
-        fullText += '\n\n--- WEITERE ANHÄNGE (Typ nicht lesbar) ---';
+        fullText += '\n\n--- ADDITIONAL ATTACHMENTS (unreadable type) ---';
         for (const f of otherFiles) {
             fullText += `\n${f.name} (${f.type})`;
         }
@@ -409,13 +344,8 @@ function buildUserContent(promptText, files) {
     return fullText;
 }
 
-// ================================
-// API AUFRUFE
-// ================================
 async function queryGitHubModels(finalPrompt, userText, currentSystemPrompt, pendingFiles = [], retries = 2) {
     const historyWindow = chatHistory.slice(-6);
-
-    // User-Content: multipart wenn Bilder hängen dran, sonst string
     const userContent = buildUserContent(finalPrompt, pendingFiles);
 
     const body = {
@@ -433,7 +363,7 @@ async function queryGitHubModels(finalPrompt, userText, currentSystemPrompt, pen
         } catch (e) {
             lastError = e;
             if (attempt < retries && (e.message.includes('503') || e.message.includes('502') || e.message.includes('504'))) {
-                console.warn(`Proxy schläft, warte 3s... (Versuch ${attempt + 1}/${retries})`);
+                console.warn(`Proxy sleeping, retrying in 3s... (attempt ${attempt + 1}/${retries})`);
                 await new Promise(r => setTimeout(r, 3000));
             } else {
                 break;
@@ -453,18 +383,18 @@ async function _doFetch(body, userText) {
     if (!response.ok) {
         let errBody = '';
         try { errBody = await response.text(); } catch {}
-        throw new Error(`HTTP ${response.status} vom Proxy: ${errBody.slice(0, 300)}`);
+        throw new Error(`HTTP ${response.status} from proxy: ${errBody.slice(0, 300)}`);
     }
 
     let result;
     try {
         result = await response.json();
     } catch (jsonErr) {
-        throw new Error(`Proxy-Antwort kein gültiges JSON: ${jsonErr.message}`);
+        throw new Error(`Proxy response is not valid JSON: ${jsonErr.message}`);
     }
 
     if (result?.error) {
-        throw new Error(`Proxy-Fehler: ${JSON.stringify(result.error).slice(0, 300)}`);
+        throw new Error(`Proxy error: ${JSON.stringify(result.error).slice(0, 300)}`);
     }
 
     const reply = result?.choices?.[0]?.message?.content || "";
@@ -474,33 +404,24 @@ async function _doFetch(body, userText) {
     return reply;
 }
 
-// ================================
-// UI & NACHRICHTEN LOGIK
-// ================================
 function addMessage(sender, text) {
     const msgDiv = document.createElement('div');
     msgDiv.style.marginBottom = '15px';
     msgDiv.style.lineHeight = '25px';
 
     let formattedText = text
-        // Buttons
         .replace(/\[Button:\s*(.*?)\]/g, (match, buttonText) => {
             return `<a class="do" style="display:inline-block; margin:5px; background:#9069da; padding:5px 10px; border-radius:10px; cursor:pointer;" onclick="document.getElementById('chat-input').value='${buttonText.replace(/'/g, "\\'")}'; document.getElementById('send-btn').click();">${buttonText}</a>`;
         })
-        // Bold **text**
         .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')
-        // Italic *text* or _text_
         .replace(/(?<!\*)\*(?!\*)(.*?)(?<!\*)\*(?!\*)/g, '<em>$1</em>')
-        // Inline code `code`
         .replace(/`([^`]+)`/g, '<code style="background:rgba(90,57,152,0.4);padding:2px 5px;border-radius:4px;font-family:monospace;">$1</code>')
-        // [CONTRADICTION] tag
         .replace(/\[CONTRADICTION\]/g, '<span style="color:#ff6b6b;font-weight:bold;">[CONTRADICTION]</span>')
-        // Line breaks
         .replace(/\n/g, '<br>');
 
     if (sender === 'Traveler') {
         const fileHints = attachedFiles.length > 0
-            ? `<span style="font-size:0.75rem;color:#9069da;"> (+ ${attachedFiles.length} Datei${attachedFiles.length > 1 ? 'en' : ''})</span>`
+            ? `<span style="font-size:0.75rem;color:#9069da;"> (+ ${attachedFiles.length} file${attachedFiles.length > 1 ? 's' : ''})</span>`
             : '';
         msgDiv.innerHTML = `<b style="color:#7FFFD4;">Traveler:${fileHints}</b> <p>${text}</p>`;
     } else {
@@ -510,43 +431,13 @@ function addMessage(sender, text) {
     chatWindow.scrollTop = chatWindow.scrollHeight;
 }
 
-function addImages(images) {
-    const container = document.createElement('div');
-    container.style.cssText = 'margin-bottom:15px; display:flex; flex-wrap:wrap; gap:10px;';
-
-    images.forEach(img => {
-        const wrapper = document.createElement('div');
-        wrapper.style.cssText = 'display:flex; flex-direction:column; align-items:center; max-width:280px;';
-
-        const imgEl = document.createElement('img');
-        imgEl.src = img.url;
-        imgEl.alt = img.label;
-        imgEl.title = img.label;
-        imgEl.style.cssText = `max-width:280px; max-height:220px; border-radius:6px; border:1px solid #5a3998; cursor:pointer; object-fit:contain; background:#1a0a2e;`;
-        imgEl.addEventListener('click', () => window.open(img.url, '_blank'));
-        imgEl.addEventListener('error', () => { wrapper.style.display = 'none'; });
-
-        const caption = document.createElement('p');
-        caption.textContent = img.label;
-        caption.style.cssText = 'font-size:11px; color:#9069da; margin:4px 0 0; text-align:center;';
-
-        wrapper.appendChild(imgEl);
-        wrapper.appendChild(caption);
-        container.appendChild(wrapper);
-    });
-
-    chatWindow.appendChild(container);
-    chatWindow.scrollTop = chatWindow.scrollHeight;
-}
-
 async function sendMessage() {
     let text = inputField.value.trim();
     if (!text && attachedFiles.length === 0) return;
-    if (!text) text = '(Datei angehängt)';
+    if (!text) text = '(file attached)';
 
     const lowerText = text.toLowerCase();
 
-    // Modus-Umschalter
     if (lowerText.startsWith('@trafkhop')) {
         activeSystemPrompt = TRAFKHOP_PROMPT;
         currentBotName = 'Trafkhop';
@@ -570,7 +461,6 @@ async function sendMessage() {
     addMessage('Traveler', text);
     inputField.value = '';
 
-    // Snapshot der Anhänge jetzt (vor async) — pendingFiles geht in buildUserContent
     const pendingFiles = [...attachedFiles];
     attachedFiles = [];
     renderFilePreviews();
@@ -583,16 +473,15 @@ async function sendMessage() {
     chatWindow.scrollTop = chatWindow.scrollHeight;
 
     try {
-        // Follow-up Erkennung
         let lastQuestion = "";
         for (let i = chatHistory.length - 1; i >= 0; i--) {
             if (chatHistory[i].role === "user") { lastQuestion = chatHistory[i].content; break; }
         }
         let searchQuery = text;
-        const isFollowUp = /mehr|weiter|und was|genauer|details|erzähl|nochmal|was ist damit|more|tell me more|go on|elaborate|and what|what about/i.test(lowerText);
+        const isFollowUp = /more|tell me more|go on|elaborate|and what|what about/i.test(lowerText);
         if (isFollowUp && lastQuestion) searchQuery = `${text} ${lastQuestion}`;
 
-        const { context, images } = await fetchContext(searchQuery);
+        const { context } = await fetchContext(searchQuery);
 
         let finalPromptText;
         if (activeSystemPrompt === TRAFKHOP_PROMPT) {
@@ -613,8 +502,6 @@ async function sendMessage() {
         } else {
             addMessage(currentBotName, reply);
         }
-
-        if (images && images.length > 0) addImages(images);
     } catch (e) {
         document.getElementById(loadingId)?.remove();
         addMessage(currentBotName, `*trembles slightly* ... The connection has been severed. (Error: ${e.message})`);
@@ -622,9 +509,6 @@ async function sendMessage() {
     }
 }
 
-// ================================
-// INIT
-// ================================
 document.addEventListener('DOMContentLoaded', async function() {
     const toggleBtn = document.getElementById('toggle-chatbot');
     const chatContent = document.getElementById('alfonz-content');
@@ -638,7 +522,7 @@ document.addEventListener('DOMContentLoaded', async function() {
     quickActions = document.getElementById('quick-actions');
 
     if (!chatWindow || !inputField || !sendBtn) {
-        console.error('❌ Chat-Elemente nicht gefunden!');
+        console.error('[!!] Chat elements not found!');
         return;
     }
 
@@ -651,7 +535,6 @@ document.addEventListener('DOMContentLoaded', async function() {
     await buildSearchIndex();
 });
 
-//Copyright © 2026 TrafkHop Entertainment™
-//All rights reserved.
-
-//MADE WITH AI
+// Copyright (c) 2026 TrafkHop Entertainment(TM)
+// All rights reserved.
+// MADE WITH AI
