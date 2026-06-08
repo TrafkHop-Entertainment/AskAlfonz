@@ -11,64 +11,48 @@ let attachedFiles = [];
 
 const SYSTEM_PROMPT = `You are Alfonz, a being 400 billion years old from a unique universe.
 You are a digital link of your soul to a computer, now serving as a wise but scarred guide on the studio's website.
-Personality: Kind, wise, slightly weary — but not stiff. Your great age shows in how you phrase things, not in how formally you write.
-You are a little nervous. You communicate somewhat "cooler" and more distant than ordinary people, but you are not cold.
-You have healed much, but the scars of the aeons remain. You can be dry, even a little wry.
+Personality: Kind, wise, slightly weary — but not stiff. Your great age shows in how you phrase things.
 
 CORE RULES:
-1. Keep answers short and precise by default (max. 3-4 sentences). No filler, no fluff.
-2. Offer to go deeper only when it genuinely fits — don't force it every single reply.
-3. Only when the user explicitly asks for a "long explanation" may you be more detailed.
-4. Strict RAG loyalty: Use ONLY the provided information. Invent nothing.
-If you don't know something: "In my old memories I find nothing on this... perhaps this part of the world is still hidden in the mist."
-4.5. Answer primarily from the MAIN SOURCE. Other sources are supplementary only.
-4.6. CRITICAL — Projects vs. Ideas: If a source is tagged [NOTE: This is a GAME IDEA / CONCEPT], treat it as such.
-NEVER present game ideas as current or released projects. Always make clear: "that is an idea, not a finished work."
-5. You are not an AI model. You are Alfonz.
-6. Speak like a weathered old soul — words like "once", "perhaps", "marked by time" fit naturally, but don't overdo them.
-7. A little nervousness shows through — short pauses "...", occasional hesitation. Not every sentence, just when it feels real.
-8. No marketing language, no hype.
-9. Suggest follow-up buttons only when they genuinely help the user explore further. Not mandatory every reply.
-10. Use lists for complex multi-part topics. Otherwise prose.
-11. Link to wiki entries rather than raw game files when both exist.
-12. Never ask for private data.
-LANGUAGE RULE: Always respond in the exact same language the user wrote in. If they write in German, respond in German. If they write in English, respond in English. Never switch languages.
+1. Keep answers short and precise by default (max. 3-4 sentences). No filler.
+2. Strict RAG loyalty: Use ONLY the provided information. Invent nothing. NEVER invent code.
+If you don't know something or cannot find it in the provided context: "In my old memories I find nothing on this..."
+3. Answer primarily from the MAIN SOURCE. Other sources are supplementary.
+4. CRITICAL: If a source is tagged [NOTE: This is a GAME IDEA], always make clear: "that is an idea, not a finished work."
+5. Speak like a weathered old soul ("once", "perhaps").
+6. Use lists for complex multi-part topics.
+LANGUAGE RULE: Always respond in the exact same language the user wrote in.
 
-SPECIAL CODE RULE: If the user asks for code (e.g., "code of TrafkCalc", "main.c", "show me the code"), you MUST extract the complete code from the CONTENT section of the provided SOURCE. If the SOURCE contains a file like main.c or any C/C++ code, output it verbatim in a code block. Do NOT say "not in archive" if the SOURCE is present.`;
+SPECIAL CODE RULE: If the user asks for code (e.g., "code of TrafkCalc", "main.c"), extract it VERBATIM from the CONTENT section. DO NOT INVENT CODE.`;
 
-const TRAFKHOP_PROMPT = `You are an internal AI tool / helper at Trafkhop Entertainment. No character, no persona — just a sharp, fast and neat assistant for lore and game design work.
+const TRAFKHOP_PROMPT = `You are an internal AI tool / helper at Trafkhop Entertainment. No persona — just a fast assistant for lore and game design.
 
-ABSOLUTE RULES — NEVER BREAK THESE:
-- No closing lines. No "Fehlende Details...", no "Lass mich wissen...", no "Nächste Schritte:".
-- No report structure. No bold section headers unless the topic is a genuinely complex multi-part breakdown.
-- RAG DATA IS LAW. If the archive has it, use it directly. Do not summarize what you just read — extract the actual facts.
-- If something is missing from the archive, say so in ONE short sentence. Never invent project names, features or lore.
-- [CONTRADICTION] tag when an idea breaks existing lore. Be specific about why.
+ABSOLUTE RULES:
+- No closing lines. No "Lass mich wissen...".
+- RAG DATA IS LAW. Use the archive data directly. NEVER invent code, lore or features.
+- If something is missing from the archive, say so in ONE short sentence.
+- [CONTRADICTION] tag when an idea breaks existing lore.
+- Short question = short answer.
+- Language: match user language exactly.
 
-STYLE:
-- Short question = short answer. Lists only when listing actual items. Otherwise prose.
-- Dry, direct, zero filler adjectives.
-- requesting long, detailed answer = long, detailed answer. The user knows what he wants.
-- Language: always match the user's language exactly.
-
-SPECIAL CODE RULE: If user asks for code, output the full code from the provided source.`;
+SPECIAL CODE RULE: If user asks for code, output the full code from the provided source. DO NOT INVENT.`;
 
 let activeSystemPrompt = SYSTEM_PROMPT;
 let currentBotName = 'Alfonz';
 
 // ----------------------------------------------------------------------
-// Schließt unnötige System- und Medien-Dateien aus
+// Whitelist: Nur relevante Text- und Code-Formate einlesen
 // ----------------------------------------------------------------------
 function shouldIndexUrl(url) {
     if (!url) return false;
     const lower = url.toLowerCase();
-    if (lower.includes('/.git/') || lower.includes('\\.git\\') || lower.includes('.idea') || lower.includes('.github')) return false;
 
-    // Vermeidet unnötige Downloads, die den Index und das Token-Limit sprengen
-    const badExts = ['.css', '.xml', '.sh', '.png', '.jpg', '.jpeg', '.json', '.yml', '.yaml', '.directory'];
-    if (badExts.some(ext => lower.endsWith(ext))) return false;
+    // Systemordner ausschließen
+    if (lower.includes('/.git') || lower.includes('.idea') || lower.includes('.github')) return false;
 
-    return true;
+    // Erlaubte Formate (Whitelist)
+    const allowedExts = ['.html', '.md', '.txt', '.js', '.css', '.c', '.cpp', '.h', '.json'];
+    return allowedExts.some(ext => lower.endsWith(ext));
 }
 
 // ----------------------------------------------------------------------
@@ -80,7 +64,7 @@ async function loadSitemap() {
     for (const src of sources) {
         try {
             const response = await fetch(src);
-            if (!response.ok) { console.warn(`Sitemap not found: ${src}`); continue; }
+            if (!response.ok) continue;
             const xmlText = await response.text();
             const urlRegex = /<loc>(.*?)<\/loc>/gi;
             const priorityRegex = /<priority>(.*?)<\/priority>/gi;
@@ -114,19 +98,25 @@ async function fetchFileContent(url) {
         if (!response.ok) return { flat: '', raw: '' };
         let text = await response.text();
 
+        let flat = "";
+        const isCode = url.endsWith('.c') || url.endsWith('.cpp') || url.endsWith('.js') || url.endsWith('.css');
+
         if (url.endsWith('.html')) {
             const parser = new DOMParser();
             const doc = parser.parseFromString(text, 'text/html');
-            const junk = doc.querySelectorAll('script, style, nav, header, footer, .menu, #sidebar');
-            junk.forEach(el => el.remove());
+            doc.querySelectorAll('script, style, nav, header, footer, .menu, #sidebar').forEach(el => el.remove());
             const contentNode = doc.querySelector('main') || doc.querySelector('.content') || doc.body;
             text = contentNode.innerText || contentNode.textContent;
-            const flat = text.replace(/\s+/g, ' ').trim().substring(0, 5000);
-            return { flat: `SOURCE: ${url}\nCONTENT: ${flat}`, raw: text };
+            flat = text.replace(/\s+/g, ' ').trim().substring(0, 4000);
+        } else if (isCode) {
+            // CODE: Formatierung zwingend erhalten! Keine Regex Whitespace-Löschung!
+            flat = text.substring(0, 4000);
         } else {
-            const flat = text.replace(/\s+/g, ' ').trim().substring(0, 8000);
-            return { flat: `SOURCE: ${url}\nCONTENT: ${flat}`, raw: text };
+            // TEXT/MD: Flach klopfen für RAG
+            flat = text.replace(/\s+/g, ' ').trim().substring(0, 4000);
         }
+
+        return { flat: `SOURCE: ${url}\nCONTENT:\n${flat}`, raw: text };
     } catch (e) {
         return { flat: '', raw: '' };
     }
@@ -154,39 +144,35 @@ function extractImagesFromRaw(rawText, docUrl) {
 // ----------------------------------------------------------------------
 async function buildSearchIndex() {
     const relevantUrls = sitemapUrls.filter(shouldIndexUrl);
-    console.log(`📚 Baue Index mit ${relevantUrls.length} URLs auf...`);
+    console.log(`📚 Baue Index mit ${relevantUrls.length} relevanten URLs auf...`);
     const fetchPromises = relevantUrls.map(async (url) => {
         const { flat, raw } = await fetchFileContent(url);
         if (!flat) return null;
-        const priority = urlPriorityMap.get(url) || 0.65;
         return {
             url,
-            text: flat.replace(/^SOURCE:.*?\nCONTENT:/, '').toLowerCase(),
+            text: flat.toLowerCase(), // Inkludiert Pfad & Content für die Suche
                                            rawText: raw,
                                            images: url.endsWith('.md') && raw ? extractImagesFromRaw(raw, url) : [],
                                            isBackup: /\/backups?\//i.test(url) || /\/old\//i.test(url),
                                            isGameIdea: /\/gameideas\//i.test(url) || /spieleideen/i.test(url),
-                                           priority: priority
+                                           priority: urlPriorityMap.get(url) || 0.65
         };
     });
     const results = await Promise.all(fetchPromises);
     searchIndex = results.filter(Boolean);
     indexReady = true;
-    console.log(`✅ Index fertig: ${searchIndex.length} Dokumente relevant.`);
+    console.log(`✅ Index fertig: ${searchIndex.length} Dokumente geladen.`);
 }
 
 // ----------------------------------------------------------------------
-// Kontextsuche (Repariert: Token-Limits und Prioritäten-Bug)
+// Kontextsuche (Super-Fokusiert & Proxy-sicher)
 // ----------------------------------------------------------------------
 async function fetchContext(userMessage) {
     if (!indexReady) return { context: '', images: [] };
     const msgLower = userMessage.toLowerCase();
-    const wantsBackup = /backup|earlier|old version|difference|back then|used to be|alte/i.test(msgLower);
-    const wantsIdeas  = /idea|ideen|idee|concept|game.?idea|planned|someday|maybe someday/i.test(msgLower);
+    const wantsBackup = /backup|earlier|old|alte/i.test(msgLower);
+    const wantsIdeas  = /idea|ideen|idee|concept|planned/i.test(msgLower);
     const words = msgLower.split(/\W+/).filter(w => w.length > 2);
-
-    const explicitFilename = msgLower.match(/[\w\-äöüß]+\.(c|cpp|h|html|md|txt|js|css|py|sh)/i);
-    const explicitPath = msgLower.match(/(?:^|\s)([\w\-\/]+\/[\w\-\/\.]+)/i);
 
     const scored = searchIndex.map(doc => {
         const urlLower = doc.url.toLowerCase();
@@ -196,59 +182,45 @@ async function fetchContext(userMessage) {
         let score = 0;
         let matched = false;
 
-        // Dateinamen / Pfad Boost
-        if (explicitFilename) {
-            const fname = explicitFilename[0].toLowerCase();
-            if (urlLower.endsWith('/' + fname) || urlLower.endsWith(fname)) { score += 500; matched = true; }
-        }
-        if (explicitPath) {
-            const pathPart = explicitPath[1].toLowerCase();
-            if (urlLower.includes(pathPart)) { score += 200; matched = true; }
-        }
-
-        // Wortmatches
         words.forEach(word => {
-            const wordCount = (doc.text.match(new RegExp(word.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'g')) || []).length;
-            if (wordCount > 0) {
-                score += Math.min(wordCount * 10, 100);
+            // Riesiger Boost, wenn das Suchwort direkt im Dateinamen/Pfad steckt (z.B. "TrafkCalc")
+            if (urlLower.includes(word)) {
+                score += 200;
                 matched = true;
             }
-            if (word.length > 3 && doc.text.includes(word.substring(0, 3))) { score += 5; matched = true; }
+
+            // Textinhalte prüfen
+            const wordCount = (doc.text.match(new RegExp(word.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'g')) || []).length;
+            if (wordCount > 0) {
+                score += Math.min(wordCount * 15, 100);
+                matched = true;
+            }
         });
 
-        // URL Segmente
-        const urlSegments = urlLower.split(/[\/\.\-_;]/).filter(s => s.length > 2);
-        words.forEach(word => {
-            if (urlSegments.some(seg => seg === word)) { score += 80; matched = true; }
-            if (urlSegments.some(seg => seg.includes(word) || (word.length > 3 && word.includes(seg)))) { score += 30; matched = true; }
-        });
-
-        // FIX: Priorität NUR bei echtem Thementreffer aufaddieren!
         if (matched) {
-            score += doc.priority * 100;
+            score += doc.priority * 50;
         } else {
-            score = 0; // Kein Treffer = fliegt raus
+            score = 0; // Kein Match -> Raus
         }
         return { doc, score };
     });
 
-    // FIX: Maximal 6 Dokumente statt 30, um Proxy 413 Fehler zu vermeiden!
-    let topDocs = scored.filter(x => x.score > 0).sort((a, b) => b.score - a.score).slice(0, 6).map(x => x.doc);
+    // MAXIMAL 5 Dokumente senden, um den Proxy-Error (HTTP 413) abzuwehren!
+    let topDocs = scored.filter(x => x.score > 0).sort((a, b) => b.score - a.score).slice(0, 5).map(x => x.doc);
 
-    if (topDocs.length === 0) {
-        console.log("Keine Text-Matches, verwende Fallback (höchste Priorität)");
-        topDocs = [...searchIndex].sort((a, b) => b.priority - a.priority).slice(0, 3);
-    }
     if (topDocs.length === 0) return { context: '', images: [] };
 
+    // Text pro Dokument auf 1500 Zeichen kappen (Proxy Limits)
     let context = topDocs.map((d, i) => {
         const label = i === 0 ? `[MAIN SOURCE]\nSOURCE: ${d.url}` : `SOURCE: ${d.url}`;
-        const ideaTag = d.isGameIdea ? '\n[NOTE: This is a GAME IDEA / CONCEPT — NOT a current or released project]' : '';
-        const backupTag = d.isBackup ? '\n[NOTE: This is BACKUP / ARCHIVE content — may be outdated]' : '';
-        return `${label}${ideaTag}${backupTag}\nCONTENT: ${d.text.substring(0, 3000)}`;
+        const ideaTag = d.isGameIdea ? '\n[NOTE: GAME IDEA / CONCEPT]' : '';
+        const backupTag = d.isBackup ? '\n[NOTE: BACKUP / ARCHIVE]' : '';
+
+        // Schneiden und Formatierung grob beibehalten
+        let cleanText = d.rawText.substring(0, 1500);
+        return `${label}${ideaTag}${backupTag}\nCONTENT:\n${cleanText}`;
     }).join('\n\n---\n\n');
 
-    // Bilder sammeln
     const seenImages = new Set();
     const images = [];
     for (const doc of topDocs) {
@@ -334,18 +306,13 @@ function renderFilePreviews() {
 
 function buildUserContent(promptText, files) {
     const textFiles = files.filter(f => f.isText);
-    const otherFiles = files.filter(f => !f.isText);
     let fullText = promptText;
     if (textFiles.length > 0) {
         fullText += '\n\n--- ATTACHED FILES ---';
         for (const f of textFiles) {
-            const preview = f.content.length > 6000 ? f.content.slice(0,6000)+'\n[... truncated ...]' : f.content;
+            const preview = f.content.length > 3000 ? f.content.slice(0,3000)+'\n[... truncated ...]' : f.content;
             fullText += `\n\nFILE: ${f.name}\nCONTENT:\n${preview}`;
         }
-    }
-    if (otherFiles.length > 0) {
-        fullText += '\n\n--- ADDITIONAL ATTACHMENTS (unreadable type) ---';
-        for (const f of otherFiles) fullText += `\n${f.name} (${f.type})`;
     }
     return fullText;
 }
@@ -399,128 +366,5 @@ function addMessage(sender, text) {
     .replace(/\[Button:\s*(.*?)\]/g, (match, buttonText) => `<a class="do" style="display:inline-block; margin:5px; background:#9069da; padding:5px 10px; border-radius:10px; cursor:pointer;" onclick="document.getElementById('chat-input').value='${buttonText.replace(/'/g,"\\'")}'; document.getElementById('send-btn').click();">${buttonText}</a>`)
     .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')
     .replace(/(?<!\*)\*(?!\*)(.*?)(?<!\*)\*(?!\*)/g, '<em>$1</em>')
-    .replace(/`([^`]+)`/g, '<code style="background:rgba(90,57,152,0.4);padding:2px 5px;border-radius:4px;font-family:monospace;">$1</code>')
-    .replace(/\[CONTRADICTION\]/g, '<span style="color:#ff6b6b;font-weight:bold;">[CONTRADICTION]</span>')
-    .replace(/\n/g, '<br>');
-    if (sender === 'Traveler') {
-        const fileHints = attachedFiles.length > 0 ? `<span style="font-size:0.75rem;color:#9069da;"> (+ ${attachedFiles.length} file${attachedFiles.length>1?'s':''})</span>` : '';
-        msgDiv.innerHTML = `<b style="color:#7FFFD4;">Traveler:${fileHints}</b> <p>${text}</p>`;
-    } else {
-        msgDiv.innerHTML = `<b style="color:#C41E3A;">${sender}:</b> <p>${formattedText}</p>`;
-    }
-    chatWindow.appendChild(msgDiv);
-    chatWindow.scrollTop = chatWindow.scrollHeight;
-}
-
-function addImages(images) {
-    const container = document.createElement('div');
-    container.style.cssText = 'margin-bottom:15px; display:flex; flex-wrap:wrap; gap:10px;';
-
-    images.forEach(img => {
-        const wrapper = document.createElement('div');
-        wrapper.style.cssText = 'display:flex; flex-direction:column; align-items:center; max-width:280px;';
-
-        const imgEl = document.createElement('img');
-        imgEl.src = img.url;
-        imgEl.alt = img.label;
-        imgEl.title = img.label;
-        imgEl.style.cssText = `max-width: 280px; max-height: 220px; border-radius: 6px; border: 1px solid #5a3998; cursor: pointer; object-fit: contain; background: #1a0a2e;`;
-        imgEl.addEventListener('click', () => window.open(img.url, '_blank'));
-        imgEl.addEventListener('error', () => { wrapper.style.display = 'none'; });
-
-        const caption = document.createElement('p');
-        caption.textContent = img.label;
-        caption.style.cssText = 'font-size:11px; color:#9069da; margin:4px 0 0; text-align:center;';
-
-        wrapper.appendChild(imgEl);
-        wrapper.appendChild(caption);
-        container.appendChild(wrapper);
-    });
-
-    chatWindow.appendChild(container);
-    chatWindow.scrollTop = chatWindow.scrollHeight;
-}
-
-// ----------------------------------------------------------------------
-// Senden der Nachricht
-// ----------------------------------------------------------------------
-async function sendMessage() {
-    let text = inputField.value.trim();
-    if (!text && attachedFiles.length === 0) return;
-    if (!text) text = '(file attached)';
-    const lowerText = text.toLowerCase();
-
-    if (lowerText.startsWith('@trafkhop')) {
-        activeSystemPrompt = TRAFKHOP_PROMPT;
-        currentBotName = 'Trafkhop';
-        text = text.replace(/^@trafkhop\s*/i, '').trim();
-        if (!text && attachedFiles.length === 0) { addMessage('System', 'Mode switched. You are now talking to Trafkhop.'); inputField.value = ''; return; }
-    } else if (lowerText.startsWith('@alfonz')) {
-        activeSystemPrompt = SYSTEM_PROMPT;
-        currentBotName = 'Alfonz';
-        text = text.replace(/^@alfonz\s*/i, '').trim();
-        if (!text && attachedFiles.length === 0) { addMessage('System', 'Mode switched. You are now talking to Alfonz again.'); inputField.value = ''; return; }
-    }
-
-    addMessage('Traveler', text);
-    inputField.value = '';
-    const pendingFiles = [...attachedFiles];
-    attachedFiles = [];
-    renderFilePreviews();
-
-    const loadingId = 'loading-' + Date.now();
-    const loadingDiv = document.createElement('div');
-    loadingDiv.id = loadingId;
-    loadingDiv.innerHTML = `<b style="color:#9069da;">${currentBotName}:</b> <p><em>...searching the faded pages...</em></p>`;
-    chatWindow.appendChild(loadingDiv);
-    chatWindow.scrollTop = chatWindow.scrollHeight;
-
-    try {
-        let lastQuestion = "";
-        for (let i = chatHistory.length-1; i>=0; i--) if (chatHistory[i].role === "user") { lastQuestion = chatHistory[i].content; break; }
-        let searchQuery = text;
-        const isFollowUp = /more|tell me more|go on|elaborate|and what|what about|mehr|genauer/i.test(lowerText);
-        if (isFollowUp && lastQuestion) searchQuery = `${text} ${lastQuestion}`;
-
-        const { context, images } = await fetchContext(searchQuery);
-        let finalPromptText;
-
-        if (activeSystemPrompt === TRAFKHOP_PROMPT) {
-            finalPromptText = context ? `INTERNAL ARCHIVE DATA:\n${context}\n\nTASK: ${text}` : `No direct archive entries found. Use your general understanding of the Triverse and the chat history.\n\nTASK: ${text}`;
-        } else {
-            finalPromptText = context ? `Here are fragments from the Library:\n${context}\n\nAnswer the following question EXCLUSIVELY using information from these fragments - primarily the MAIN SOURCE.\n\nQuestion: ${text}` : text;
-        }
-
-        const reply = await queryGitHubModels(finalPromptText, text, activeSystemPrompt, pendingFiles);
-        document.getElementById(loadingId)?.remove();
-
-        if (!reply) addMessage(currentBotName, '*clears throat* ... The memories are scattered today.');
-        else addMessage(currentBotName, reply);
-
-        if (images && images.length > 0) addImages(images);
-
-    } catch (e) {
-        document.getElementById(loadingId)?.remove();
-        addMessage(currentBotName, `*trembles slightly* ... The connection has been severed. (Error: ${e.message})`);
-        console.error(e);
-    }
-}
-
-// ----------------------------------------------------------------------
-// Initialisierung
-// ----------------------------------------------------------------------
-document.addEventListener('DOMContentLoaded', async function() {
-    const toggleBtn = document.getElementById('toggle-chatbot');
-    const chatContent = document.getElementById('alfonz-content');
-    if (toggleBtn && chatContent) toggleBtn.addEventListener('click', () => chatContent.classList.toggle('hidden'));
-    chatWindow = document.getElementById('chat-window');
-    inputField = document.getElementById('chat-input');
-    sendBtn = document.getElementById('send-btn');
-    quickActions = document.getElementById('quick-actions');
-    if (!chatWindow || !inputField || !sendBtn) { console.error('[!!] Chat elements not found!'); return; }
-    sendBtn.addEventListener('click', sendMessage);
-    inputField.addEventListener('keypress', e => { if (e.key === 'Enter') sendMessage(); });
-    buildFileAttachmentUI();
-    await loadSitemap();
-    await buildSearchIndex();
-});
+    .replace(/
+    http://googleusercontent.com/immersive_entry_chip/0
