@@ -32,7 +32,9 @@ NEVER present game ideas as current or released projects. Always make clear: "th
 10. Use lists for complex multi-part topics. Otherwise prose.
 11. Link to wiki entries rather than raw game files when both exist.
 12. Never ask for private data.
-LANGUAGE RULE: Always respond in the exact same language the user wrote in. If they write in German, respond in German. If they write in English, respond in English. Never switch languages.`;
+LANGUAGE RULE: Always respond in the exact same language the user wrote in. If they write in German, respond in German. If they write in English, respond in English. Never switch languages.
+
+SPECIAL CODE RULE: If the user asks for code (e.g., "code of TrafkCalc", "main.c", "show me the code"), you MUST extract the complete code from the CONTENT section of the provided SOURCE. If the SOURCE contains a file like main.c or any C/C++ code, output it verbatim in a code block. Do NOT say "not in archive" if the SOURCE is present.`;
 
 const TRAFKHOP_PROMPT = `You are an internal AI tool / helper at Trafkhop Entertainment. No character, no persona — just a sharp, fast and neat assistant for lore and game design work.
 
@@ -47,13 +49,15 @@ STYLE:
 - Short question = short answer. Lists only when listing actual items. Otherwise prose.
 - Dry, direct, zero filler adjectives.
 - requesting long, detailed answer = long, detailed answer. The user knows what he wants.
-- Language: always match the user's language exactly.`;
+- Language: always match the user's language exactly.
+
+SPECIAL CODE RULE: If user asks for code, output the full code from the provided source.`;
 
 let activeSystemPrompt = SYSTEM_PROMPT;
 let currentBotName = 'Alfonz';
 
 // ----------------------------------------------------------------------
-// Nur .git Verzeichnisse ausschließen, sonst alles indexieren
+// Nur .git Verzeichnisse ausschließen
 // ----------------------------------------------------------------------
 function shouldIndexUrl(url) {
     if (!url) return false;
@@ -115,7 +119,7 @@ async function fetchFileContent(url) {
             const contentNode = doc.querySelector('main') || doc.querySelector('.content') || doc.body;
             text = contentNode.innerText || contentNode.textContent;
         }
-        const flat = text.replace(/\s+/g, ' ').trim().substring(0, 6000);
+        const flat = text.replace(/\s+/g, ' ').trim().substring(0, 8000);
         return { flat: `SOURCE: ${url}\nCONTENT: ${flat}`, raw: text };
     } catch (e) {
         console.error(`❌ Fetch-Error für ${url}:`, e);
@@ -148,7 +152,7 @@ async function buildSearchIndex() {
 }
 
 // ----------------------------------------------------------------------
-// Kontextsuche: robust, viele Treffer, exakte Dateinamen bevorzugt
+// Kontextsuche: maximale Treffer, keine willkürlichen Limits
 // ----------------------------------------------------------------------
 async function fetchContext(userMessage) {
     if (!indexReady) return { context: '' };
@@ -158,7 +162,7 @@ async function fetchContext(userMessage) {
     const words = msgLower.split(/\W+/).filter(w => w.length > 2);
 
     // Exakte Dateinamen (z.B. "main.c", "TrafkCalc.c")
-    const explicitFilename = msgLower.match(/[\w\-äöüß]+\.(?:c|cpp|h|html|md|txt|js|css|py|sh)/i);
+    const explicitFilename = msgLower.match(/[\w\-äöüß]+\.(c|cpp|h|html|md|txt|js|css|py|sh)/i);
     // Exakte Pfade (z.B. "projects/TrafkCalc")
     const explicitPath = msgLower.match(/(?:^|\s)([\w\-\/]+\/[\w\-\/\.]+)/i);
 
@@ -172,26 +176,26 @@ async function fetchContext(userMessage) {
         // Exakte Dateinamen: sehr hoher Boost
         if (explicitFilename) {
             const fname = explicitFilename[0].toLowerCase();
-            if (urlLower.endsWith('/' + fname) || urlLower.endsWith(fname)) score += 200;
+            if (urlLower.endsWith('/' + fname) || urlLower.endsWith(fname)) score += 500;
         }
         // Pfad-Boost
         if (explicitPath) {
             const pathPart = explicitPath[1].toLowerCase();
-            if (urlLower.includes(pathPart)) score += 100;
+            if (urlLower.includes(pathPart)) score += 200;
         }
 
         // Wortmatches im Text
         words.forEach(word => {
             const wordCount = (doc.text.match(new RegExp(word.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'g')) || []).length;
-            score += Math.min(wordCount * 8, 60);
+            score += Math.min(wordCount * 10, 100);
             if (word.length > 3 && doc.text.includes(word.substring(0, 3))) score += 5;
         });
 
-            // URL-Segment-Matches
+            // URL-Segment-Matches (z.B. "trafkcalc" in path)
             const urlSegments = urlLower.split(/[\/\.\-_;]/).filter(s => s.length > 2);
             words.forEach(word => {
-                if (urlSegments.some(seg => seg === word)) score += 40;
-                if (urlSegments.some(seg => seg.includes(word) || (word.length > 3 && word.includes(seg)))) score += 15;
+                if (urlSegments.some(seg => seg === word)) score += 80;
+                if (urlSegments.some(seg => seg.includes(word) || (word.length > 3 && word.includes(seg)))) score += 30;
             });
 
                 // Priorität aus Sitemap (0-85 Punkte)
@@ -199,12 +203,16 @@ async function fetchContext(userMessage) {
                 return { doc, score };
     });
 
-    let topDocs = scored.filter(x => x.score > 0).sort((a, b) => b.score - a.score).slice(0, 10).map(x => x.doc);
+    // Alle Dokumente mit Score > 0 nehmen, aber auf max 30 begrenzen, um Token-Limit nicht zu sprengen
+    let topDocs = scored.filter(x => x.score > 0).sort((a, b) => b.score - a.score).slice(0, 30).map(x => x.doc);
     if (topDocs.length === 0) {
         console.log("Keine Text-Matches, verwende Fallback (höchste Priorität)");
-        topDocs = [...searchIndex].sort((a, b) => b.priority - a.priority).slice(0, 5);
+        topDocs = [...searchIndex].sort((a, b) => b.priority - a.priority).slice(0, 10);
     }
     if (topDocs.length === 0) return { context: '' };
+
+    // Logge die gefundenen relevanten URLs für Debugging
+    console.log(`🔍 Relevante Dokumente für "${userMessage}":`, topDocs.map(d => d.url));
 
     const context = topDocs.map((d, i) => {
         const label = i === 0 ? `[MAIN SOURCE]\nSOURCE: ${d.url}` : `SOURCE: ${d.url}`;
@@ -438,5 +446,6 @@ document.addEventListener('DOMContentLoaded', async function() {
     await buildSearchIndex();
 });
 
-// Copyright (c) 2026 TrafkHop Entertainment(TM) All rights reserved.
-//MADE WITH AI
+// Copyright (c) 2026 TrafkHop Entertainment(TM)
+// All rights reserved.
+// MADE WITH AI
