@@ -1,0 +1,1 @@
+1. Liste mir die 4 aktuellsten Projekte des Studios 2. Erkläre mir grob das ganze grundwerk der TrafkHop Lore, wirklich erklären mit Begriffen auf den Docs 3. zeig mir den code des TrafkCalcs
