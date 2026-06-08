@@ -12,7 +12,7 @@ let chatHistory = [];
 let sitemapUrls = [];
 let searchIndex = [];
 let indexReady = false;
-let attachedFiles = []; // { name, type, content (base64 or text), isText }
+let attachedFiles = []; // { name, type, content (text), isText }
 
 // Prompts
 const SYSTEM_PROMPT = `You are Alfonz, a being 400 billion years old from a unique universe.
@@ -285,7 +285,7 @@ function buildFileAttachmentUI() {
     fileInput.type = 'file';
     fileInput.id = 'file-input-hidden';
     fileInput.multiple = true;
-    fileInput.accept = '*/*';
+    fileInput.accept = '.txt,.md,.json,.js,.ts,.css,.html,.xml,.csv,.py,.yaml,.yml,.log,.pdf,.docx,.zip';
     fileInput.style.display = 'none';
 
     // Preview-Container (über dem Input-Bereich)
@@ -307,33 +307,34 @@ function buildFileAttachmentUI() {
 
 async function handleFileSelect(e) {
     const files = Array.from(e.target.files);
+    let rejectedImages = [];
     for (const file of files) {
         const isText = file.type.startsWith('text/') || /\.(md|txt|json|js|css|html|xml|csv|py|yaml|yml)$/i.test(file.name);
         const isImage = file.type.startsWith('image/');
 
-        if (isText) {
+        if (isImage) {
+            // Bilder werden nicht unterstützt – kurze Meldung im Chat
+            rejectedImages.push(file.name);
+        } else if (isText) {
             const content = await file.text();
             attachedFiles.push({ name: file.name, type: file.type || 'text/plain', content, isText: true });
-        } else if (isImage) {
-            const base64 = await toBase64(file);
-            attachedFiles.push({ name: file.name, type: file.type, content: base64, isText: false, isImage: true });
         } else {
-            // Generic binary – als Base64 senden, Modell wird es als text/plain behandeln
-            const base64 = await toBase64(file);
-            attachedFiles.push({ name: file.name, type: file.type || 'application/octet-stream', content: base64, isText: false });
+            // Generic binary – Name als Hinweis mitschicken
+            attachedFiles.push({ name: file.name, type: file.type || 'application/octet-stream', content: '', isText: false });
         }
         renderFilePreviews();
     }
-    e.target.value = ''; // Reset damit dieselbe Datei nochmal gewählt werden kann
-}
-
-function toBase64(file) {
-    return new Promise((resolve, reject) => {
-        const reader = new FileReader();
-        reader.onload = () => resolve(reader.result.split(',')[1]);
-        reader.onerror = reject;
-        reader.readAsDataURL(file);
-    });
+    if (rejectedImages.length > 0) {
+        // Direkt im Chat anzeigen ohne einen API-Call zu machen
+        if (chatWindow) {
+            const note = document.createElement('div');
+            note.style.cssText = 'margin-bottom:10px; color:#ff9966; font-size:0.85rem;';
+            note.innerHTML = `⚠️ Bilder werden leider nicht unterstützt: <em>${rejectedImages.join(', ')}</em>`;
+            chatWindow.appendChild(note);
+            chatWindow.scrollTop = chatWindow.scrollHeight;
+        }
+    }
+    e.target.value = '';
 }
 
 function renderFilePreviews() {
@@ -348,7 +349,7 @@ function renderFilePreviews() {
             color: white; display: flex; align-items: center; gap: 6px;
             max-width: 180px; overflow: hidden; white-space: nowrap;
         `;
-        const icon = f.isImage ? '🖼️' : (f.isText ? '📄' : '📦');
+        const icon = f.isText ? '📄' : '📦';
         chip.innerHTML = `<span>${icon} ${f.name.length > 18 ? f.name.slice(0, 16) + '...' : f.name}</span>`;
 
         const removeBtn = document.createElement('span');
@@ -363,14 +364,11 @@ function renderFilePreviews() {
     });
 }
 
-// Baut den user-content Array für die API:
-// Gibt ein Array zurück (multipart wenn Bilder dabei, sonst plain string)
+// Baut den user-content String für die API
 function buildUserContent(promptText, files) {
     const textFiles = files.filter(f => f.isText);
-    const imageFiles = files.filter(f => f.isImage);
-    const otherFiles = files.filter(f => !f.isText && !f.isImage);
+    const otherFiles = files.filter(f => !f.isText);
 
-    // Text-Anhänge in den Prompt integrieren
     let fullText = promptText;
     if (textFiles.length > 0) {
         fullText += '\n\n--- ANGEHÄNGTE DATEIEN ---';
@@ -380,27 +378,12 @@ function buildUserContent(promptText, files) {
         }
     }
     if (otherFiles.length > 0) {
-        fullText += '\n\n--- WEITERE ANHÄNGE (nicht lesbar) ---';
+        fullText += '\n\n--- WEITERE ANHÄNGE (Typ nicht lesbar) ---';
         for (const f of otherFiles) {
             fullText += `\n${f.name} (${f.type})`;
         }
     }
-
-    // Kein Bild → einfacher String
-    if (imageFiles.length === 0) return fullText;
-
-    // Bilder vorhanden → multipart content Array (OpenAI Vision Format)
-    const parts = [{ type: "text", text: fullText }];
-    for (const img of imageFiles) {
-        parts.push({
-            type: "image_url",
-            image_url: {
-                url: `data:${img.type};base64,${img.content}`,
-                detail: "auto"
-            }
-        });
-    }
-    return parts;
+    return fullText;
 }
 
 // ================================
