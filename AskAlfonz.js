@@ -4,6 +4,7 @@ const PROXY_URL = "https://trafkhop-entertainment-alfonzproxy.hf.space/chat";
 const BASE_URL = "https://trafkhop-entertainment.github.io/TrafkSite/";
 let chatHistory = [];
 let sitemapUrls = [];
+let urlPriorityMap = new Map();   // URL -> priority (0.1 ... 0.85)
 let searchIndex = [];
 let indexReady = false;
 let attachedFiles = [];
@@ -19,10 +20,10 @@ CORE RULES:
 2. Offer to go deeper only when it genuinely fits — don't force it every single reply.
 3. Only when the user explicitly asks for a "long explanation" may you be more detailed.
 4. Strict RAG loyalty: Use ONLY the provided information. Invent nothing.
-   If you don't know something: "In my old memories I find nothing on this... perhaps this part of the world is still hidden in the mist."
+If you don't know something: "In my old memories I find nothing on this... perhaps this part of the world is still hidden in the mist."
 4.5. Answer primarily from the MAIN SOURCE. Other sources are supplementary only.
 4.6. CRITICAL — Projects vs. Ideas: If a source is tagged [NOTE: This is a GAME IDEA / CONCEPT], treat it as such.
-     NEVER present game ideas as current or released projects. Always make clear: "that is an idea, not a finished work."
+NEVER present game ideas as current or released projects. Always make clear: "that is an idea, not a finished work."
 5. You are not an AI model. You are Alfonz.
 6. Speak like a weathered old soul — words like "once", "perhaps", "marked by time" fit naturally, but don't overdo them.
 7. A little nervousness shows through — short pauses "...", occasional hesitation. Not every sentence, just when it feels real.
@@ -52,6 +53,9 @@ STYLE:
 let activeSystemPrompt = SYSTEM_PROMPT;
 let currentBotName = 'Alfonz';
 
+// ----------------------------------------------------------------------
+// HILFSFUNKTIONEN (Pfadfilter)
+// ----------------------------------------------------------------------
 function isBackupUrl(url) {
     return /\/backups?\//i.test(url) || /\/old\//i.test(url);
 }
@@ -79,6 +83,45 @@ function shouldIndexUrl(url) {
     return hasNoExt || allowedExtensions.some(ext => lower.endsWith(ext));
 }
 
+// ----------------------------------------------------------------------
+// SITEMAP LADEN (URL + priority)
+// ----------------------------------------------------------------------
+async function loadSitemap() {
+    const sources = ['sitemap.xml'];
+    const seenUrls = new Set();
+
+    for (const src of sources) {
+        try {
+            const response = await fetch(src);
+            if (!response.ok) { console.warn(`Sitemap not found: ${src}`); continue; }
+            const xmlText = await response.text();
+            const urlRegex = /<loc>(.*?)<\/loc>/gi;
+            const priorityRegex = /<priority>(.*?)<\/priority>/gi;
+
+            let locMatch;
+            const priorities = [...xmlText.matchAll(priorityRegex)].map(m => m[1]);
+            let idx = 0;
+            while ((locMatch = urlRegex.exec(xmlText)) !== null) {
+                let url = locMatch[1].trim();
+                let priority = (idx < priorities.length) ? priorities[idx] : "0.65";
+                idx++;
+                if (!url.includes('projects/Raufbold3bs-Scratch-Archive/Raufbold3bs-Scratch-Archive/') && !seenUrls.has(url)) {
+                    seenUrls.add(url);
+                    sitemapUrls.push(url);
+                    urlPriorityMap.set(url, parseFloat(priority));
+                }
+            }
+            console.log(`From ${src}: ${sitemapUrls.length} URLs loaded with priorities.`);
+            break;
+        } catch (e) {
+            console.warn(`Error loading ${src}: ${e.message}`);
+        }
+    }
+}
+
+// ----------------------------------------------------------------------
+// TEXTE AUS DATEIEN EXTRAHIEREN (HTML, MD, TXT)
+// ----------------------------------------------------------------------
 async function fetchFileContent(url) {
     try {
         const response = await fetch(encodeURI(url));
@@ -105,45 +148,23 @@ async function fetchFileContent(url) {
     }
 }
 
-async function loadSitemap() {
-    const sources = ['sitemap.xml'];
-    const seenUrls = new Set();
-
-    for (const src of sources) {
-        try {
-            const response = await fetch(src);
-            if (!response.ok) { console.warn(`Sitemap not found: ${src}`); continue; }
-            const xmlText = await response.text();
-            const locMatches = xmlText.matchAll(/<loc>(.*?)<\/loc>/gi);
-            let count = 0;
-            for (const match of locMatches) {
-                let url = match[1].trim();
-                if (!url.includes('projects/Raufbold3bs-Scratch-Archive/Raufbold3bs-Scratch-Archive/') && !seenUrls.has(url)) {
-                    seenUrls.add(url);
-                    sitemapUrls.push(url);
-                    count++;
-                }
-            }
-            console.log(`From ${src}: ${count} new URLs.`);
-            break;
-        } catch (e) {
-            console.warn(`Error loading ${src}: ${e.message}`);
-        }
-    }
-}
-
+// ----------------------------------------------------------------------
+// SUCHINDEX AUFBAUEN (mit priority aus Sitemap)
+// ----------------------------------------------------------------------
 async function buildSearchIndex() {
     console.log("[+] Building full-text index...");
     const relevantUrls = sitemapUrls.filter(u => shouldIndexUrl(u) && !isGitUrl(u));
     const fetchPromises = relevantUrls.map(async (url) => {
         const { flat, raw } = await fetchFileContent(url);
         if (!flat) return null;
+        const priority = urlPriorityMap.get(url) || 0.65;
         return {
             url,
             text: flat.replace(/^SOURCE:.*?\nCONTENT:/, '').toLowerCase(),
-            rawText: raw,
-            isBackup: isBackupUrl(url),
-            isGameIdea: isGameIdeaUrl(url)
+                                           rawText: raw,
+                                           isBackup: isBackupUrl(url),
+                                           isGameIdea: isGameIdeaUrl(url),
+                                           priority: priority
         };
     });
 
@@ -153,6 +174,9 @@ async function buildSearchIndex() {
     console.log(`[OK] Index ready (${searchIndex.length} documents)`);
 }
 
+// ----------------------------------------------------------------------
+// KONTEXTSUCHE (nur Wortmatches + priority, KEINE manuellen Ordnergewichte)
+// ----------------------------------------------------------------------
 async function fetchContext(userMessage) {
     if (!indexReady) return { context: '' };
     const msgLower = userMessage.toLowerCase();
@@ -168,11 +192,13 @@ async function fetchContext(userMessage) {
     const scored = searchIndex.map(doc => {
         const urlLower = doc.url.toLowerCase();
 
+        // Filter: Backup nur wenn gewünscht, GameIdeas nur wenn gewünscht
         if (doc.isBackup && !wantsBackup) return { doc, score: -1 };
         if (doc.isGameIdea && !wantsIdeas) return { doc, score: -1 };
 
         let score = 0;
 
+        // Explizite Dateinamen/ Pfade stark gewichten
         if (explicitFilename) {
             const fname = explicitFilename[0].toLowerCase();
             if (urlLower.endsWith('/' + fname) || urlLower.endsWith(fname)) score += 80;
@@ -182,44 +208,37 @@ async function fetchContext(userMessage) {
             if (urlLower.includes(pathPart)) score += 60;
         }
 
-        if (/who|who is|character/i.test(msgLower) && urlLower.includes('/wiki/')) score += 15;
-        if (/lore|story|history|background/i.test(msgLower) && urlLower.includes('/lore/')) score += 15;
-        if (/studio|trafkhop|about you|about the team/i.test(msgLower) && urlLower.includes('/studio/')) score += 15;
-        if (/wiki/i.test(msgLower) && urlLower.includes('/wiki/')) score += 20;
-        if (/notes|sourcehop/i.test(msgLower) && urlLower.includes('/sourcehop')) score += 15;
-
-        if (wantsProjects && urlLower.includes('/projects/')) score += 20;
-        if (wantsProjects && doc.isGameIdea) score -= 25;
-        if (wantsIdeas && doc.isGameIdea) score += 20;
-        if (wantsIdeas && urlLower.includes('/projects/') && !doc.isGameIdea) score -= 10;
-
-        const urlSegments = urlLower.split(/[\/\.\-_;]/).filter(s => s.length > 2);
-
+        // Wortmatches im Text
         words.forEach(word => {
             const wordCount = (doc.text.match(new RegExp(word.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'g')) || []).length;
             score += Math.min(wordCount * 5, 40);
-
             if (word.length > 4 && doc.text.includes(word.substring(0, 4))) score += 2;
-
-            if (urlSegments.some(seg => seg === word)) score += 25;
-            if (urlSegments.some(seg => seg.includes(word) || (word.length > 3 && word.includes(seg)))) score += 10;
         });
 
-        if (urlLower.includes('/wiki/') || urlLower.includes('/lore/')) score += 5;
-        if (urlLower.includes('/studio/')) score += 3;
-        if (urlLower.includes('/projects/')) score += 3;
+            // URL-Segment-Matches (z.B. "TrafkCalc" in Pfad)
+            const urlSegments = urlLower.split(/[\/\.\-_;]/).filter(s => s.length > 2);
+            words.forEach(word => {
+                if (urlSegments.some(seg => seg === word)) score += 25;
+                if (urlSegments.some(seg => seg.includes(word) || (word.length > 3 && word.includes(seg)))) score += 10;
+            });
 
-        if (urlLower.includes('/backup') || urlLower.includes('/old/')) score -= 50;
-        if (/rsa\s?_/i.test(urlLower)) score -= 20;
+                // ---- PRIORITY AUS SITEMAP EINFLIESSEN LASSEN ----
+                // priority ist 0.1-0.85 -> multiplizieren, damit es sichtbar wird
+                const priorityWeight = doc.priority * 100;   // max 85 Punkte
+                score += priorityWeight;
 
-        return { doc, score };
+                return { doc, score };
     });
 
-    const topDocs = scored
-        .filter(x => x.score > 0)
-        .sort((a, b) => b.score - a.score)
-        .slice(0, 5)
-        .map(x => x.doc);
+    // Top 5 Dokumente mit Score > 0, sonst Fallback: Dokumente mit höchster priority
+    let topDocs = scored.filter(x => x.score > 0).sort((a, b) => b.score - a.score).slice(0, 5).map(x => x.doc);
+    if (topDocs.length === 0) {
+        // Fallback: Nimm die 3 Dokumente mit der höchsten priority (ohne Berücksichtigung der Query)
+        console.log("No text matches, falling back to highest priority docs.");
+        topDocs = [...searchIndex]
+        .sort((a, b) => b.priority - a.priority)
+        .slice(0, 3);
+    }
 
     if (topDocs.length === 0) return { context: '' };
 
@@ -233,6 +252,9 @@ async function fetchContext(userMessage) {
     return { context };
 }
 
+// ----------------------------------------------------------------------
+// FILE ATTACHMENT UI (bleibt unverändert)
+// ----------------------------------------------------------------------
 function buildFileAttachmentUI() {
     const row = document.getElementById('chat-input-row');
     if (!row || document.getElementById('attach-btn')) return;
@@ -242,11 +264,11 @@ function buildFileAttachmentUI() {
     attachBtn.title = 'Attach file';
     attachBtn.innerHTML = '[+]';
     attachBtn.style.cssText = `
-        height: 3rem; width: 3rem; font-size: 1.3rem;
-        background: transparent; border: 2px solid #5a3998;
-        border-radius: 50%; cursor: pointer; color: white;
-        display: flex; align-items: center; justify-content: center;
-        flex-shrink: 0;
+    height: 3rem; width: 3rem; font-size: 1.3rem;
+    background: transparent; border: 2px solid #5a3998;
+    border-radius: 50%; cursor: pointer; color: white;
+    display: flex; align-items: center; justify-content: center;
+    flex-shrink: 0;
     `;
 
     const fileInput = document.createElement('input');
@@ -259,8 +281,8 @@ function buildFileAttachmentUI() {
     const previewContainer = document.createElement('div');
     previewContainer.id = 'file-preview-container';
     previewContainer.style.cssText = `
-        position: fixed; bottom: 10.5rem; left: 4rem; right: 4rem;
-        display: flex; flex-wrap: wrap; gap: 8px;
+    position: fixed; bottom: 10.5rem; left: 4rem; right: 4rem;
+    display: flex; flex-wrap: wrap; gap: 8px;
     `;
 
     attachBtn.addEventListener('click', () => fileInput.click());
@@ -303,10 +325,10 @@ function renderFilePreviews() {
     attachedFiles.forEach((f, i) => {
         const chip = document.createElement('div');
         chip.style.cssText = `
-            background: rgba(90,57,152,0.7); border: 1px solid #9069da;
-            border-radius: 20px; padding: 4px 10px; font-size: 0.8rem;
-            color: white; display: flex; align-items: center; gap: 6px;
-            max-width: 180px; overflow: hidden; white-space: nowrap;
+        background: rgba(90,57,152,0.7); border: 1px solid #9069da;
+        border-radius: 20px; padding: 4px 10px; font-size: 0.8rem;
+        color: white; display: flex; align-items: center; gap: 6px;
+        max-width: 180px; overflow: hidden; white-space: nowrap;
         `;
         const icon = f.isText ? '[doc]' : '[pkg]';
         chip.innerHTML = `<span>${icon} ${f.name.length > 18 ? f.name.slice(0, 16) + '...' : f.name}</span>`;
@@ -344,6 +366,9 @@ function buildUserContent(promptText, files) {
     return fullText;
 }
 
+// ----------------------------------------------------------------------
+// API AUFRUF (Proxy)
+// ----------------------------------------------------------------------
 async function queryGitHubModels(finalPrompt, userText, currentSystemPrompt, pendingFiles = [], retries = 2) {
     const historyWindow = chatHistory.slice(-6);
     const userContent = buildUserContent(finalPrompt, pendingFiles);
@@ -404,25 +429,28 @@ async function _doFetch(body, userText) {
     return reply;
 }
 
+// ----------------------------------------------------------------------
+// UI NACHRICHTEN
+// ----------------------------------------------------------------------
 function addMessage(sender, text) {
     const msgDiv = document.createElement('div');
     msgDiv.style.marginBottom = '15px';
     msgDiv.style.lineHeight = '25px';
 
     let formattedText = text
-        .replace(/\[Button:\s*(.*?)\]/g, (match, buttonText) => {
-            return `<a class="do" style="display:inline-block; margin:5px; background:#9069da; padding:5px 10px; border-radius:10px; cursor:pointer;" onclick="document.getElementById('chat-input').value='${buttonText.replace(/'/g, "\\'")}'; document.getElementById('send-btn').click();">${buttonText}</a>`;
-        })
-        .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')
-        .replace(/(?<!\*)\*(?!\*)(.*?)(?<!\*)\*(?!\*)/g, '<em>$1</em>')
-        .replace(/`([^`]+)`/g, '<code style="background:rgba(90,57,152,0.4);padding:2px 5px;border-radius:4px;font-family:monospace;">$1</code>')
-        .replace(/\[CONTRADICTION\]/g, '<span style="color:#ff6b6b;font-weight:bold;">[CONTRADICTION]</span>')
-        .replace(/\n/g, '<br>');
+    .replace(/\[Button:\s*(.*?)\]/g, (match, buttonText) => {
+        return `<a class="do" style="display:inline-block; margin:5px; background:#9069da; padding:5px 10px; border-radius:10px; cursor:pointer;" onclick="document.getElementById('chat-input').value='${buttonText.replace(/'/g, "\\'")}'; document.getElementById('send-btn').click();">${buttonText}</a>`;
+    })
+    .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')
+    .replace(/(?<!\*)\*(?!\*)(.*?)(?<!\*)\*(?!\*)/g, '<em>$1</em>')
+    .replace(/`([^`]+)`/g, '<code style="background:rgba(90,57,152,0.4);padding:2px 5px;border-radius:4px;font-family:monospace;">$1</code>')
+    .replace(/\[CONTRADICTION\]/g, '<span style="color:#ff6b6b;font-weight:bold;">[CONTRADICTION]</span>')
+    .replace(/\n/g, '<br>');
 
     if (sender === 'Traveler') {
         const fileHints = attachedFiles.length > 0
-            ? `<span style="font-size:0.75rem;color:#9069da;"> (+ ${attachedFiles.length} file${attachedFiles.length > 1 ? 's' : ''})</span>`
-            : '';
+        ? `<span style="font-size:0.75rem;color:#9069da;"> (+ ${attachedFiles.length} file${attachedFiles.length > 1 ? 's' : ''})</span>`
+        : '';
         msgDiv.innerHTML = `<b style="color:#7FFFD4;">Traveler:${fileHints}</b> <p>${text}</p>`;
     } else {
         msgDiv.innerHTML = `<b style="color:#C41E3A;">${sender}:</b> <p>${formattedText}</p>`;
@@ -431,6 +459,9 @@ function addMessage(sender, text) {
     chatWindow.scrollTop = chatWindow.scrollHeight;
 }
 
+// ----------------------------------------------------------------------
+// SENDEN
+// ----------------------------------------------------------------------
 async function sendMessage() {
     let text = inputField.value.trim();
     if (!text && attachedFiles.length === 0) return;
@@ -486,12 +517,12 @@ async function sendMessage() {
         let finalPromptText;
         if (activeSystemPrompt === TRAFKHOP_PROMPT) {
             finalPromptText = context
-                ? `INTERNAL ARCHIVE DATA:\n${context}\n\nTASK: ${text}`
-                : `No direct archive entries found. Use your general understanding of the Triverse and the chat history.\n\nTASK: ${text}`;
+            ? `INTERNAL ARCHIVE DATA:\n${context}\n\nTASK: ${text}`
+            : `No direct archive entries found. Use your general understanding of the Triverse and the chat history.\n\nTASK: ${text}`;
         } else {
             finalPromptText = context
-                ? `Here are fragments from the Library:\n${context}\n\nAnswer the following question EXCLUSIVELY using information from these fragments - primarily the MAIN SOURCE.\n\nQuestion: ${text}`
-                : text;
+            ? `Here are fragments from the Library:\n${context}\n\nAnswer the following question EXCLUSIVELY using information from these fragments - primarily the MAIN SOURCE.\n\nQuestion: ${text}`
+            : text;
         }
 
         const reply = await queryGitHubModels(finalPromptText, text, activeSystemPrompt, pendingFiles);
@@ -509,6 +540,9 @@ async function sendMessage() {
     }
 }
 
+// ----------------------------------------------------------------------
+// INIT
+// ----------------------------------------------------------------------
 document.addEventListener('DOMContentLoaded', async function() {
     const toggleBtn = document.getElementById('toggle-chatbot');
     const chatContent = document.getElementById('alfonz-content');
