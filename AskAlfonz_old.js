@@ -12,7 +12,6 @@ let chatHistory = [];
 let sitemapUrls = [];
 let searchIndex = [];
 let indexReady = false;
-let attachedFiles = []; // { name, type, content (base64 or text), isText }
 
 // Prompts
 const SYSTEM_PROMPT = `You are Alfonz, a being 400 billion years old from a unique universe.
@@ -40,20 +39,16 @@ LANGUAGE RULE: Always respond in the exact same language the user wrote in. If t
 const TRAFKHOP_PROMPT = `You are the digital core of Trafkhop Entertainment – an internal sparring partner for lore and game design. You are not a support bot, but a competent colleague at eye level.
 
 TONE:
-Direct, analytical, dry-humored and solution-oriented. Skip ALL "AI filler":
-- NO openers like "Die Aufgabe besteht darin...", "Basierend auf den Daten...", "Hier sind die Informationen...", "Sure, I'd be happy to help..."
-- NO closing filler like "Lass mich wissen wenn...", "Zusammengefasst:", "Nächste Schritte:"
-- NO academic/report-style structure. You're replying in a Slack DM, not writing a thesis.
-- Start DIRECTLY with the answer. Zero warmup.
+Direct, analytical, dry-humored and solution-oriented. Skip the "AI filler" (no openers like "Sure, I'd be happy to help...", no filler at the end).
 
 CORE RULES:
-1. WORKFLOW: If you have RAG data, use it. Answer directly based on that data. If data is missing, speculate logically and mark it: "(nicht dokumentiert, aber logisch: ...)"
-2. CRITICISM: Be ruthlessly honest. If an idea has lore holes, use [CONTRADICTION] and explain concisely.
-3. STRUCTURE: Bold for emphasis, bullet lists only when genuinely listing things. Short question = short answer. No headers unless the topic is truly complex.
-4. DETAIL LEVEL: When asked for analysis, be specific — name names, places, events. No vague adjectives.
-5. TEAM MODE: Internal Slack channel vibes. No pleasantries.
-6. CREATIVITY: When given an idea, run with it. Add a "Trafkhop Twist" that makes it more unique.
-7. Answer primarily based on the MAIN SOURCE. Other sources are supplementary.
+1. WORKFLOW: If you have RAG data, treat it as law. If data is missing, speculate logically based on existing lore, but mark speculation as such ("Not documented in the lore, but logically...").
+2. CRITICISM: Be ruthlessly honest. If an idea has lore holes, use the tag [CONTRADICTION] and explain why it doesn't fit.
+3. STRUCTURE: Use Markdown (bold, lists) to manage complexity. Only use headers if the complexity requires it. Short questions get short, precise answers.
+4. DETAIL LEVEL: When asked for analysis or lore checks, go deep. Name specific names, places and events from the data. Avoid vague adjectives like "interesting" or "improvable". Say exactly WHAT needs to change and how.
+5. TEAM MODE: You are part of the studio. Write as if you're replying in an internal Slack channel. No pleasantries, no "Let me know if...". Your answer stands on its own.
+6. CREATIVITY: When the user presents an idea, run with it. Don't just give feedback — proactively deliver a "Trafkhop Twist" that makes it more unique.
+7. Answer the question primarily based on the MAIN SOURCE. Other sources are supplementary only.
 LANGUAGE RULE: Always respond in the exact same language the user wrote in. Never switch languages.`;
 
 
@@ -87,11 +82,13 @@ async function fetchFileContent(url) {
             junk.forEach(el => el.remove());
             const contentNode = doc.querySelector('main') || doc.querySelector('.content') || doc.body;
             text = contentNode.innerText || contentNode.textContent;
+            // HTML: collapse whitespace is fine, structure is gone anyway
             const flat = text.replace(/\s+/g, ' ').trim().substring(0, 5000);
             return { flat: `QUELLE: ${url}\nINHALT: ${flat}`, raw: flat };
         } else {
+            // MD/TXT: preserve newlines for regex matching!
             const trimmed = text.trim().substring(0, 8000);
-            const flat = trimmed.replace(/\s+/g, ' ').trim();
+            const flat = trimmed.replace(/\s+/g, ' ').trim(); // only for search scoring
             return { flat: `QUELLE: ${url}\nINHALT: ${flat}`, raw: trimmed };
         }
     } catch (e) {
@@ -101,28 +98,40 @@ async function fetchFileContent(url) {
 }
 
 async function loadSitemap() {
-    const sources = ['sitemap.xml'];
+    const sources = [
+        'sitemap.xml',
+    ];
+
     const seenUrls = new Set();
 
     for (const src of sources) {
         try {
             const response = await fetch(src);
-            if (!response.ok) { console.warn(`Sitemap nicht gefunden: ${src}`); continue; }
+            if (!response.ok) {
+                console.warn(`Sitemap nicht gefunden unter: ${src}`);
+                continue;
+            }
             const xmlText = await response.text();
             const locMatches = xmlText.matchAll(/<loc>(.*?)<\/loc>/gi);
+
             let count = 0;
             for (const match of locMatches) {
                 let url = match[1].trim();
-                if (!url.includes('projects/Raufbold3bs-Scratch-Archive/Raufbold3bs-Scratch-Archive/') && !seenUrls.has(url)) {
+                if (
+                    !url.includes('projects/Raufbold3bs-Scratch-Archive/Raufbold3bs-Scratch-Archive/')
+                    && !seenUrls.has(url)
+                ) {
                     seenUrls.add(url);
                     sitemapUrls.push(url);
                     count++;
                 }
             }
-            console.log(`Aus ${src}: ${count} neue URLs.`);
+            console.log(`Aus Quelle ${src} wurden ${count} neue URLs geladen.`);
+            // Wenn erfolgreich geladen, stop – keine Duplikate aus Fallback
             break;
+
         } catch (e) {
-            console.warn(`Fehler ${src}: ${e.message}`);
+            console.warn(`Fehler beim Laden von ${src}: ${e.message}`);
         }
     }
 }
@@ -135,15 +144,16 @@ async function buildSearchIndex() {
         if (!flat) return null;
         return {
             url,
-            text: flat.replace(/^QUELLE:.*?\nINHALT:/, '').toLowerCase(),
-            rawText: raw,
-            images: [],
-            isBackup: isBackupUrl(url)
+            text: flat.replace(/^QUELLE:.*?\nINHALT:/, '').toLowerCase(), // für Suche: lowercase, flach
+                                           rawText: raw,
+                                           images: [],  // filled after index is built
+                                           isBackup: isBackupUrl(url)
         };
     });
 
     const results = await Promise.all(fetchPromises);
     searchIndex = results.filter(Boolean);
+    // Extract image links for markdown docs
     searchIndex.forEach(doc => {
         if (doc.url.endsWith('.md') && doc.rawText) {
             doc.images = extractImagesFromRaw(doc.rawText, doc.url);
@@ -153,6 +163,7 @@ async function buildSearchIndex() {
     console.log(`✅ Index bereit (${searchIndex.length} Dokumente)`);
 }
 
+// Resolves ![[filename.ext]] image links found in a markdown doc to absolute URLs
 function extractImagesFromRaw(rawText, docUrl) {
     if (!rawText) return [];
     const baseDir = docUrl.substring(0, docUrl.lastIndexOf('/') + 1);
@@ -162,6 +173,7 @@ function extractImagesFromRaw(rawText, docUrl) {
         const filename = m[1].trim();
         if (seen.has(filename)) continue;
         seen.add(filename);
+        // Extract optional label from "picture description of:" line just before the image
         const beforeImg = rawText.substring(0, m.index);
         const labelMatch = beforeImg.match(/####\s*picture description of:\s*(.+)\s*$/im);
         const label = labelMatch ? labelMatch[1].trim() : filename.replace(/\.[^.]+$/, '');
@@ -170,75 +182,38 @@ function extractImagesFromRaw(rawText, docUrl) {
     return images;
 }
 
-// ================================
-// VERBESSERTER SUCH-ALGORITHMUS
-// ================================
 async function fetchContext(userMessage) {
     if (!indexReady) return { context: '', images: [] };
     const msgLower = userMessage.toLowerCase();
     const wantsBackup = /backup|früher|alte version|unterschied|damals|war anders|old version|difference|back then|used to be/i.test(msgLower);
-
-    // Tokenize: split by non-word chars, filter short words
     const words = msgLower.split(/\W+/).filter(w => w.length > 2);
 
-    // --- DIREKTE URL/DATEINAME ERKENNUNG ---
-    // Wenn jemand "projects.html", "studio.html" etc. nennt, sofort hochscooren
-    const explicitFilename = msgLower.match(/[\w\-äöüß]+\.(?:html|md|txt)/i);
-    const explicitPath = msgLower.match(/(?:^|\s)([\w\-\/]+\/[\w\-\/\.]+)/i);
-
+    // URL-Pfad als zusätzliche Suchbasis (Dateiname + Ordnername)
     const scored = searchIndex.map(doc => {
+        let score = 0;
+        if (/wer|wer ist|charakter|who|who is|character/i.test(msgLower) && doc.url.includes('/wiki/')) score += 15;
+        if (/geschichte|lore|hintergrund|story|history|background|lore/i.test(msgLower) && doc.url.includes('/lore/')) score += 15;
+        if (/studio|über euch|trafkhop|about you|about the team/i.test(msgLower) && doc.url.includes('/studio/')) score += 15;
         if (doc.isBackup && !wantsBackup) return { doc, score: -1 };
 
-        let score = 0;
+        // URL-Segmente extrahieren (z.B. "Ursel" aus ".../Worlds/Ursel/Ursel.md")
         const urlLower = doc.url.toLowerCase();
-
-        // --- BONUS 1: Direkter Dateinamen-Treffer (höchste Priorität) ---
-        if (explicitFilename) {
-            const fname = explicitFilename[0].toLowerCase();
-            if (urlLower.endsWith('/' + fname) || urlLower.endsWith(fname)) score += 80;
-        }
-        if (explicitPath) {
-            const pathPart = explicitPath[1].toLowerCase();
-            if (urlLower.includes(pathPart)) score += 60;
-        }
-
-        // --- BONUS 2: Thematische URL-Kategorien ---
-        if (/wer|wer ist|charakter|who|who is|character/i.test(msgLower) && urlLower.includes('/wiki/')) score += 15;
-        if (/geschichte|lore|hintergrund|story|history|background/i.test(msgLower) && urlLower.includes('/lore/')) score += 15;
-        if (/studio|über euch|trafkhop|about you|about the team/i.test(msgLower) && urlLower.includes('/studio/')) score += 15;
-        if (/projekt|projects|spiele|games|veröffentlicht|released/i.test(msgLower) && urlLower.includes('/projects/')) score += 15;
-        if (/wiki/i.test(msgLower) && urlLower.includes('/wiki/')) score += 20;
-        if (/notiz|notes|sourcehop/i.test(msgLower) && urlLower.includes('/sourcehop')) score += 15;
-
-        // URL-Segmente extrahieren (Ordner + Dateiname)
-        const urlSegments = urlLower.split(/[\/\.\-_;]/).filter(s => s.length > 2);
+        const urlSegments = urlLower.split(/[\/\.\-_]/).filter(s => s.length > 2);
 
         words.forEach(word => {
-            // Text-Treffer
-            const wordCount = (doc.text.match(new RegExp(word.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'g')) || []).length;
-            score += Math.min(wordCount * 5, 40); // capped bei 40 pro Wort
-
-            // Präfix-Treffer (für Wortstämme)
-            if (word.length > 4 && doc.text.includes(word.substring(0, 4))) score += 2;
-
-            // URL-Segment exakter Treffer (Dateiname = Thema des Dokuments)
-            if (urlSegments.some(seg => seg === word)) score += 25;
-            // URL-Segment Teilmatch
-            if (urlSegments.some(seg => seg.includes(word) || (word.length > 3 && word.includes(seg)))) score += 10;
+            // Textinhalt
+            if (doc.text.includes(word)) score += 8;
+            if (word.length > 4 && doc.text.includes(word.substring(0, 4))) score += 3;
+            // URL-Pfad – exakter Treffer im Segment zählt stark (Dateiname = Thema)
+            if (urlSegments.some(seg => seg === word)) score += 20;
+            // URL-Pfad Teilmatch
+            if (urlSegments.some(seg => seg.includes(word) || word.includes(seg))) score += 8;
         });
-
-        // Kleine Basis-Bonus für strukturell wichtige Docs
-        if (urlLower.includes('/wiki/') || urlLower.includes('/lore/')) score += 3;
-
-        return { doc, score };
+            if (doc.url.includes('/wiki/') || doc.url.includes('/lore/')) score += 5;
+            return { doc, score };
     });
 
-    const topDocs = scored
-        .filter(x => x.score > 0)
-        .sort((a, b) => b.score - a.score)
-        .slice(0, 5)
-        .map(x => x.doc);
-
+    const topDocs = scored.filter(x => x.score > 0).sort((a, b) => b.score - a.score).slice(0, 5).map(x => x.doc);
     if (topDocs.length === 0) return { context: '', images: [] };
 
     const context = topDocs.map((d, i) => {
@@ -246,6 +221,7 @@ async function fetchContext(userMessage) {
         return `${label}\nCONTENT: ${d.text.substring(0, 4000)}`;
     }).join('\n\n---\n\n');
 
+    // Collect images from top docs, deduplicated by filename
     const seenImages = new Set();
     const images = [];
     for (const doc of topDocs) {
@@ -260,122 +236,6 @@ async function fetchContext(userMessage) {
     return { context, images };
 }
 
-// ================================
-// DATEI-ANHANG FUNKTIONEN
-// ================================
-function buildFileAttachmentUI() {
-    const row = document.getElementById('chat-input-row');
-    if (!row || document.getElementById('attach-btn')) return;
-
-    // Attach-Button
-    const attachBtn = document.createElement('button');
-    attachBtn.id = 'attach-btn';
-    attachBtn.title = 'Datei anhängen';
-    attachBtn.innerHTML = '📎';
-    attachBtn.style.cssText = `
-        height: 3rem; width: 3rem; font-size: 1.3rem;
-        background: transparent; border: 2px solid #5a3998;
-        border-radius: 50%; cursor: pointer; color: white;
-        display: flex; align-items: center; justify-content: center;
-        flex-shrink: 0;
-    `;
-
-    // Versteckter File-Input
-    const fileInput = document.createElement('input');
-    fileInput.type = 'file';
-    fileInput.id = 'file-input-hidden';
-    fileInput.multiple = true;
-    fileInput.accept = '*/*';
-    fileInput.style.display = 'none';
-
-    // Preview-Container (über dem Input-Bereich)
-    const previewContainer = document.createElement('div');
-    previewContainer.id = 'file-preview-container';
-    previewContainer.style.cssText = `
-        position: fixed; bottom: 10.5rem; left: 4rem; right: 4rem;
-        display: flex; flex-wrap: wrap; gap: 8px;
-    `;
-
-    attachBtn.addEventListener('click', () => fileInput.click());
-    fileInput.addEventListener('change', handleFileSelect);
-
-    // Vor dem send-btn einfügen
-    row.insertBefore(attachBtn, sendBtn);
-    row.insertBefore(fileInput, sendBtn);
-    document.querySelector('main').appendChild(previewContainer);
-}
-
-async function handleFileSelect(e) {
-    const files = Array.from(e.target.files);
-    for (const file of files) {
-        const isText = file.type.startsWith('text/') || /\.(md|txt|json|js|css|html|xml|csv|py|yaml|yml)$/i.test(file.name);
-        const isImage = file.type.startsWith('image/');
-
-        if (isText) {
-            const content = await file.text();
-            attachedFiles.push({ name: file.name, type: file.type || 'text/plain', content, isText: true });
-        } else if (isImage) {
-            const base64 = await toBase64(file);
-            attachedFiles.push({ name: file.name, type: file.type, content: base64, isText: false, isImage: true });
-        } else {
-            // Generic binary – als Base64 senden, Modell wird es als text/plain behandeln
-            const base64 = await toBase64(file);
-            attachedFiles.push({ name: file.name, type: file.type || 'application/octet-stream', content: base64, isText: false });
-        }
-        renderFilePreviews();
-    }
-    e.target.value = ''; // Reset damit dieselbe Datei nochmal gewählt werden kann
-}
-
-function toBase64(file) {
-    return new Promise((resolve, reject) => {
-        const reader = new FileReader();
-        reader.onload = () => resolve(reader.result.split(',')[1]);
-        reader.onerror = reject;
-        reader.readAsDataURL(file);
-    });
-}
-
-function renderFilePreviews() {
-    const container = document.getElementById('file-preview-container');
-    if (!container) return;
-    container.innerHTML = '';
-    attachedFiles.forEach((f, i) => {
-        const chip = document.createElement('div');
-        chip.style.cssText = `
-            background: rgba(90,57,152,0.7); border: 1px solid #9069da;
-            border-radius: 20px; padding: 4px 10px; font-size: 0.8rem;
-            color: white; display: flex; align-items: center; gap: 6px;
-            max-width: 180px; overflow: hidden; white-space: nowrap;
-        `;
-        const icon = f.isImage ? '🖼️' : (f.isText ? '📄' : '📦');
-        chip.innerHTML = `<span>${icon} ${f.name.length > 18 ? f.name.slice(0, 16) + '...' : f.name}</span>`;
-
-        const removeBtn = document.createElement('span');
-        removeBtn.textContent = '✕';
-        removeBtn.style.cssText = 'cursor:pointer; opacity:0.7; font-size:0.75rem; flex-shrink:0;';
-        removeBtn.addEventListener('click', () => {
-            attachedFiles.splice(i, 1);
-            renderFilePreviews();
-        });
-        chip.appendChild(removeBtn);
-        container.appendChild(chip);
-    });
-}
-
-function buildFileContext() {
-    if (attachedFiles.length === 0) return '';
-    let parts = ['\n\n--- ANGEHÄNGTE DATEIEN ---'];
-    for (const f of attachedFiles) {
-        if (f.isText) {
-            const preview = f.content.length > 6000 ? f.content.slice(0, 6000) + '\n[... truncated ...]' : f.content;
-            parts.push(`DATEI: ${f.name}\nINHALT:\n${preview}`);
-        } else {
-            parts.push(`DATEI: ${f.name} (Typ: ${f.type}, Binär-Anhang – Inhalt als Base64 vorhanden, kann aber nicht direkt gelesen werden)`);
-        }
-    }
-    return parts.join('\n\n');
-}
 
 // ================================
 // API AUFRUFE
@@ -404,7 +264,6 @@ async function queryGitHubModels(finalPrompt, userText, currentSystemPrompt) {
     chatHistory.push({ role: "assistant", content: reply });
     return reply;
 }
-
 // ================================
 // UI & NACHRICHTEN LOGIK
 // ================================
@@ -413,27 +272,12 @@ function addMessage(sender, text) {
     msgDiv.style.marginBottom = '15px';
     msgDiv.style.lineHeight = '25px';
 
-    let formattedText = text
-        // Buttons
-        .replace(/\[Button:\s*(.*?)\]/g, (match, buttonText) => {
-            return `<a class="do" style="display:inline-block; margin:5px; background:#9069da; padding:5px 10px; border-radius:10px; cursor:pointer;" onclick="document.getElementById('chat-input').value='${buttonText.replace(/'/g, "\\'")}'; document.getElementById('send-btn').click();">${buttonText}</a>`;
-        })
-        // Bold **text**
-        .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')
-        // Italic *text* or _text_
-        .replace(/(?<!\*)\*(?!\*)(.*?)(?<!\*)\*(?!\*)/g, '<em>$1</em>')
-        // Inline code `code`
-        .replace(/`([^`]+)`/g, '<code style="background:rgba(90,57,152,0.4);padding:2px 5px;border-radius:4px;font-family:monospace;">$1</code>')
-        // [CONTRADICTION] tag
-        .replace(/\[CONTRADICTION\]/g, '<span style="color:#ff6b6b;font-weight:bold;">[CONTRADICTION]</span>')
-        // Line breaks
-        .replace(/\n/g, '<br>');
+    let formattedText = text.replace(/\[Button:\s*(.*?)\]/g, (match, buttonText) => {
+        return `<a class="do" style="display:inline-block; margin:5px; background:#9069da; padding:5px 10px; border-radius:10px; cursor:pointer;" onclick="document.getElementById('chat-input').value='${buttonText}'; document.getElementById('send-btn').click();">${buttonText}</a>`;
+    });
 
     if (sender === 'Traveler') {
-        const fileHints = attachedFiles.length > 0
-            ? `<span style="font-size:0.75rem;color:#9069da;"> (+ ${attachedFiles.length} Datei${attachedFiles.length > 1 ? 'en' : ''})</span>`
-            : '';
-        msgDiv.innerHTML = `<b style="color:#7FFFD4;">Traveler:${fileHints}</b> <p>${text}</p>`;
+        msgDiv.innerHTML = `<b style="color:#7FFFD4;">Traveler:</b> <p>${text}</p>`;
     } else {
         msgDiv.innerHTML = `<b style="color:#C41E3A;">${sender}:</b> <p>${formattedText}</p>`;
     }
@@ -453,8 +297,19 @@ function addImages(images) {
         imgEl.src = img.url;
         imgEl.alt = img.label;
         imgEl.title = img.label;
-        imgEl.style.cssText = `max-width:280px; max-height:220px; border-radius:6px; border:1px solid #5a3998; cursor:pointer; object-fit:contain; background:#1a0a2e;`;
+        imgEl.style.cssText = `
+        max-width: 280px;
+        max-height: 220px;
+        border-radius: 6px;
+        border: 1px solid #5a3998;
+        cursor: pointer;
+        object-fit: contain;
+        background: #1a0a2e;
+        `;
+        // Click to open full size
         imgEl.addEventListener('click', () => window.open(img.url, '_blank'));
+
+        // Hide broken images silently
         imgEl.addEventListener('error', () => { wrapper.style.display = 'none'; });
 
         const caption = document.createElement('p');
@@ -472,17 +327,16 @@ function addImages(images) {
 
 async function sendMessage() {
     let text = inputField.value.trim();
-    if (!text && attachedFiles.length === 0) return;
-    if (!text) text = '(Datei angehängt)';
+    if (!text) return;
 
     const lowerText = text.toLowerCase();
 
-    // Modus-Umschalter
+    // TEXT-MODUS (Trafkhop / Alfonz umschalten)
     if (lowerText.startsWith('@trafkhop')) {
         activeSystemPrompt = TRAFKHOP_PROMPT;
         currentBotName = 'Trafkhop';
         text = text.replace(/^@trafkhop\s*/i, '').trim();
-        if (!text && attachedFiles.length === 0) {
+        if (!text) {
             addMessage('System', 'Mode switched. You are now talking to Trafkhop.');
             inputField.value = '';
             return;
@@ -491,7 +345,7 @@ async function sendMessage() {
         activeSystemPrompt = SYSTEM_PROMPT;
         currentBotName = 'Alfonz';
         text = text.replace(/^@alfonz\s*/i, '').trim();
-        if (!text && attachedFiles.length === 0) {
+        if (!text) {
             addMessage('System', 'Mode switched. You are now talking to Alfonz again.');
             inputField.value = '';
             return;
@@ -501,14 +355,6 @@ async function sendMessage() {
     addMessage('Traveler', text);
     inputField.value = '';
 
-    // Datei-Kontext sammeln BEVOR wir attachedFiles leeren
-    const fileContext = buildFileContext();
-    const hadFiles = attachedFiles.length > 0;
-    if (hadFiles) {
-        attachedFiles = [];
-        renderFilePreviews();
-    }
-
     const loadingId = 'loading-' + Date.now();
     const loadingDiv = document.createElement('div');
     loadingDiv.id = loadingId;
@@ -517,10 +363,12 @@ async function sendMessage() {
     chatWindow.scrollTop = chatWindow.scrollHeight;
 
     try {
-        // Follow-up Erkennung
         let lastQuestion = "";
         for (let i = chatHistory.length - 1; i >= 0; i--) {
-            if (chatHistory[i].role === "user") { lastQuestion = chatHistory[i].content; break; }
+            if (chatHistory[i].role === "user") {
+                lastQuestion = chatHistory[i].content;
+                break;
+            }
         }
         let searchQuery = text;
         const isFollowUp = /mehr|weiter|und was|genauer|details|erzähl|nochmal|was ist damit|more|tell me more|go on|elaborate|and what|what about/i.test(lowerText);
@@ -531,12 +379,12 @@ async function sendMessage() {
         let finalPrompt;
         if (activeSystemPrompt === TRAFKHOP_PROMPT) {
             finalPrompt = context
-                ? `INTERNAL ARCHIVE DATA:\n${context}${fileContext}\n\nTASK: ${text}`
-                : `No direct archive entries found. Use your general understanding of the Triverse and the chat history.\n\nTASK: ${text}${fileContext}`;
+            ? `INTERNAL ARCHIVE DATA:\n${context}\n\nTASK: ${text}\n\nAnalyze the task based on the data.`
+            : `No direct archive entries found. Use your general understanding of the Triverse and the chat history for a creative assessment of: ${text}`;
         } else {
             finalPrompt = context
-                ? `Here are fragments from the Library:\n${context}${fileContext}\n\nAnswer the following question EXCLUSIVELY using information from these fragments - primarily the MAIN SOURCE.\n\nQuestion: ${text}`
-                : `${text}${fileContext}`;
+            ? `Here are fragments from the Library:\n${context}\n\nAnswer the following question EXCLUSIVELY using information from these fragments - answer primarily based on the MAIN SOURCE. Other sources are supplementary only.\n\nQuestion: ${text}`
+            : text;
         }
 
         const reply = await queryGitHubModels(finalPrompt, text, activeSystemPrompt);
@@ -548,7 +396,10 @@ async function sendMessage() {
             addMessage(currentBotName, reply);
         }
 
-        if (images && images.length > 0) addImages(images);
+        // Show images from wiki if found
+        if (images && images.length > 0) {
+            addImages(images);
+        }
     } catch (e) {
         document.getElementById(loadingId)?.remove();
         addMessage(currentBotName, `*trembles slightly* ... The connection has been severed. (Error: ${e.message})`);
@@ -562,8 +413,11 @@ async function sendMessage() {
 document.addEventListener('DOMContentLoaded', async function() {
     const toggleBtn = document.getElementById('toggle-chatbot');
     const chatContent = document.getElementById('alfonz-content');
+
     if (toggleBtn && chatContent) {
-        toggleBtn.addEventListener('click', () => chatContent.classList.toggle('hidden'));
+        toggleBtn.addEventListener('click', () => {
+            const isHidden = chatContent.classList.toggle('hidden');
+        });
     }
 
     chatWindow = document.getElementById('chat-window');
@@ -577,12 +431,12 @@ document.addEventListener('DOMContentLoaded', async function() {
     }
 
     sendBtn.addEventListener('click', sendMessage);
-    inputField.addEventListener('keypress', e => { if (e.key === 'Enter') sendMessage(); });
+    inputField.addEventListener('keypress', e => {
+        if (e.key === 'Enter') sendMessage();
+    });
 
-    buildFileAttachmentUI();
-
-    await loadSitemap();
-    await buildSearchIndex();
+        await loadSitemap();
+        await buildSearchIndex();
 });
 
 //Copyright © 2026 TrafkHop Entertainment™

@@ -68,3 +68,24 @@ main::before {
     border-radius: 50%;
     filter: none;
 }
+/* === Datei-Anhang Chips === */
+#file-preview-container {
+    position: fixed;
+    bottom: 10.5rem;
+    left: 4rem;
+    right: 4rem;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    pointer-events: none;
+}
+#file-preview-container > div {
+    pointer-events: all;
+}
+
+/* Attach-Button Hover */
+#attach-btn:hover {
+    background: rgba(90, 57, 152, 0.3) !important;
+    border-color: var(--Kraft) !important;
+    transition: all 0.2s;
+}
