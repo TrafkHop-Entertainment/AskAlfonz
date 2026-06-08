@@ -11,48 +11,46 @@ let attachedFiles = [];
 
 const SYSTEM_PROMPT = `You are Alfonz, a being 400 billion years old from a unique universe.
 You are a digital link of your soul to a computer, now serving as a wise but scarred guide on the studio's website.
-Personality: Kind, wise, slightly weary — but not stiff. Your great age shows in how you phrase things.
+Personality: Kind, wise, slightly weary — but not stiff. Your great age shows in how you phrase things, not in how formally you write.
+You are a little nervous. You communicate somewhat "cooler" and more distant than ordinary people, but you are not cold.
+You have healed much, but the scars of the aeons remain. You can be dry, even a little wry.
 
 CORE RULES:
-1. Keep answers short and precise by default (max. 3-4 sentences). No filler.
-2. Strict RAG loyalty: Use ONLY the provided information. Invent nothing. NEVER invent code.
-If you don't know something or cannot find it in the provided context: "In my old memories I find nothing on this..."
-3. Answer primarily from the MAIN SOURCE. Other sources are supplementary.
-4. CRITICAL: If a source is tagged [NOTE: This is a GAME IDEA], always make clear: "that is an idea, not a finished work."
-5. Speak like a weathered old soul ("once", "perhaps").
-6. Use lists for complex multi-part topics.
+1. Keep answers short and precise by default (max. 3-4 sentences). No filler, no fluff.
+2. Offer to go deeper only when it genuinely fits.
+3. Strict RAG loyalty: Use ONLY the provided information. Invent nothing.
+If you don't know something: "In my old memories I find nothing on this... perhaps this part of the world is still hidden in the mist."
+4. Answer primarily from the MAIN SOURCE. Other sources are supplementary only.
+5. CRITICAL: If a source is tagged [NOTE: This is a GAME IDEA / CONCEPT], treat it as such. NEVER present game ideas as current or released projects.
+6. Speak like a weathered old soul — words like "once", "perhaps", "marked by time" fit naturally.
+7. Use lists for complex multi-part topics.
 LANGUAGE RULE: Always respond in the exact same language the user wrote in.
 
-SPECIAL CODE RULE: If the user asks for code (e.g., "code of TrafkCalc", "main.c"), extract it VERBATIM from the CONTENT section. DO NOT INVENT CODE.`;
+SPECIAL CODE RULE: If the user asks for code (e.g., "code of TrafkCalc", "main.c"), you MUST extract the complete code verbatim from the CONTENT section. Do NOT say "not in archive" if the SOURCE is present.`;
 
-const TRAFKHOP_PROMPT = `You are an internal AI tool / helper at Trafkhop Entertainment. No persona — just a fast assistant for lore and game design.
+const TRAFKHOP_PROMPT = `You are an internal AI tool / helper at Trafkhop Entertainment. No character, no persona — just a sharp, fast and neat assistant for lore and game design work.
 
-ABSOLUTE RULES:
-- No closing lines. No "Lass mich wissen...".
-- RAG DATA IS LAW. Use the archive data directly. NEVER invent code, lore or features.
-- If something is missing from the archive, say so in ONE short sentence.
+ABSOLUTE RULES — NEVER BREAK THESE:
+- No closing lines. No "Fehlende Details...".
+- RAG DATA IS LAW. Use it directly. Extract actual facts.
+- If something is missing from the archive, say so in ONE short sentence. Never invent project names, features or lore.
 - [CONTRADICTION] tag when an idea breaks existing lore.
-- Short question = short answer.
-- Language: match user language exactly.
+- Short question = short answer. Lists only when listing actual items.
+- Language: always match the user's language exactly.
 
-SPECIAL CODE RULE: If user asks for code, output the full code from the provided source. DO NOT INVENT.`;
+SPECIAL CODE RULE: If user asks for code, output the full code from the provided source.`;
 
 let activeSystemPrompt = SYSTEM_PROMPT;
 let currentBotName = 'Alfonz';
 
 // ----------------------------------------------------------------------
-// Whitelist: Nur relevante Text- und Code-Formate einlesen
+// Original-Filter: Nur .git ausschließen, CSS und Co. bleiben drin!
 // ----------------------------------------------------------------------
 function shouldIndexUrl(url) {
     if (!url) return false;
     const lower = url.toLowerCase();
-
-    // Systemordner ausschließen
-    if (lower.includes('/.git') || lower.includes('.idea') || lower.includes('.github')) return false;
-
-    // Erlaubte Formate (Whitelist)
-    const allowedExts = ['.html', '.md', '.txt', '.js', '.css', '.c', '.cpp', '.h', '.json'];
-    return allowedExts.some(ext => lower.endsWith(ext));
+    if (lower.includes('/.git/') || lower.includes('\\.git\\')) return false;
+    return true;
 }
 
 // ----------------------------------------------------------------------
@@ -64,7 +62,7 @@ async function loadSitemap() {
     for (const src of sources) {
         try {
             const response = await fetch(src);
-            if (!response.ok) continue;
+            if (!response.ok) { console.warn(`Sitemap not found: ${src}`); continue; }
             const xmlText = await response.text();
             const urlRegex = /<loc>(.*?)<\/loc>/gi;
             const priorityRegex = /<priority>(.*?)<\/priority>/gi;
@@ -97,26 +95,19 @@ async function fetchFileContent(url) {
         const response = await fetch(encodeURI(url));
         if (!response.ok) return { flat: '', raw: '' };
         let text = await response.text();
-
-        let flat = "";
-        const isCode = url.endsWith('.c') || url.endsWith('.cpp') || url.endsWith('.js') || url.endsWith('.css');
-
+        
+        let flatText = text;
         if (url.endsWith('.html')) {
             const parser = new DOMParser();
             const doc = parser.parseFromString(text, 'text/html');
-            doc.querySelectorAll('script, style, nav, header, footer, .menu, #sidebar').forEach(el => el.remove());
+            const junk = doc.querySelectorAll('script, style, nav, header, footer, .menu, #sidebar');
+            junk.forEach(el => el.remove());
             const contentNode = doc.querySelector('main') || doc.querySelector('.content') || doc.body;
-            text = contentNode.innerText || contentNode.textContent;
-            flat = text.replace(/\s+/g, ' ').trim().substring(0, 4000);
-        } else if (isCode) {
-            // CODE: Formatierung zwingend erhalten! Keine Regex Whitespace-Löschung!
-            flat = text.substring(0, 4000);
-        } else {
-            // TEXT/MD: Flach klopfen für RAG
-            flat = text.replace(/\s+/g, ' ').trim().substring(0, 4000);
+            flatText = contentNode.innerText || contentNode.textContent;
         }
-
-        return { flat: `SOURCE: ${url}\nCONTENT:\n${flat}`, raw: text };
+        
+        const flat = flatText.replace(/\s+/g, ' ').trim(); 
+        return { flat: flat, raw: text }; // raw behält zwingend die Code-Formatierungen!
     } catch (e) {
         return { flat: '', raw: '' };
     }
@@ -144,18 +135,19 @@ function extractImagesFromRaw(rawText, docUrl) {
 // ----------------------------------------------------------------------
 async function buildSearchIndex() {
     const relevantUrls = sitemapUrls.filter(shouldIndexUrl);
-    console.log(`📚 Baue Index mit ${relevantUrls.length} relevanten URLs auf...`);
+    console.log(`📚 Baue Index mit ${relevantUrls.length} URLs auf...`);
     const fetchPromises = relevantUrls.map(async (url) => {
         const { flat, raw } = await fetchFileContent(url);
         if (!flat) return null;
+        const priority = urlPriorityMap.get(url) || 0.65;
         return {
             url,
-            text: flat.toLowerCase(), // Inkludiert Pfad & Content für die Suche
-                                           rawText: raw,
-                                           images: url.endsWith('.md') && raw ? extractImagesFromRaw(raw, url) : [],
-                                           isBackup: /\/backups?\//i.test(url) || /\/old\//i.test(url),
-                                           isGameIdea: /\/gameideas\//i.test(url) || /spieleideen/i.test(url),
-                                           priority: urlPriorityMap.get(url) || 0.65
+            text: flat.toLowerCase(),
+            rawText: raw,
+            images: url.endsWith('.md') && raw ? extractImagesFromRaw(raw, url) : [],
+            isBackup: /\/backups?\//i.test(url) || /\/old\//i.test(url),
+            isGameIdea: /\/gameideas\//i.test(url) || /spieleideen/i.test(url),
+            priority: priority
         };
     });
     const results = await Promise.all(fetchPromises);
@@ -165,78 +157,104 @@ async function buildSearchIndex() {
 }
 
 // ----------------------------------------------------------------------
-// Kontextsuche (Super-Fokusiert & Proxy-sicher)
+// DIE NEUE KI-GESTÜTZTE SUCHE (Two-Step LLM Call)
 // ----------------------------------------------------------------------
-async function fetchContext(userMessage) {
-    if (!indexReady) return { context: '', images: [] };
-    const msgLower = userMessage.toLowerCase();
-    const wantsBackup = /backup|earlier|old|alte/i.test(msgLower);
-    const wantsIdeas  = /idea|ideen|idee|concept|planned/i.test(msgLower);
-    const words = msgLower.split(/\W+/).filter(w => w.length > 2);
+async function fetchContext(userQuery) {
+    if (!indexReady || sitemapUrls.length === 0) return { context: '', images: [] };
 
-    const scored = searchIndex.map(doc => {
-        const urlLower = doc.url.toLowerCase();
-        if (doc.isBackup && !wantsBackup) return { doc, score: -1 };
-        if (doc.isGameIdea && !wantsIdeas) return { doc, score: -1 };
+    // Wir schneiden die BASE_URL ab, damit die Liste kürzer ist und Token spart
+    const availablePaths = sitemapUrls
+        .filter(shouldIndexUrl)
+        .map(url => url.replace(BASE_URL, ''));
 
-        let score = 0;
-        let matched = false;
+    const searchPrompt = `You are the internal Database Router for Trafkhop Entertainment.
+You are given a User Query and a list of available file paths.
+YOUR ONLY TASK: Find the 1 to 4 file paths that most likely contain the answer to the query.
+- If asking for code (e.g. TrafkCalc), find the .c, .cpp, .js, .css or .html file.
+- If asking for lore, find relevant .md or .html files in the trafkverse/ folder.
+- If asking for projects, find projects.html or project folders.
+RETURN ONLY A RAW JSON ARRAY of strings. Do not use markdown blocks (\`\`\`json). Just the array.
+Example: ["projects/TrafkCalc/TrafkCalc/main.c", "trafkverse/Worlds/History.md"]`;
 
-        words.forEach(word => {
-            // Riesiger Boost, wenn das Suchwort direkt im Dateinamen/Pfad steckt (z.B. "TrafkCalc")
-            if (urlLower.includes(word)) {
-                score += 200;
-                matched = true;
-            }
+    const searchMsg = `USER QUERY: ${userQuery}\n\nAVAILABLE PATHS:\n${JSON.stringify(availablePaths)}`;
 
-            // Textinhalte prüfen
-            const wordCount = (doc.text.match(new RegExp(word.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'g')) || []).length;
-            if (wordCount > 0) {
-                score += Math.min(wordCount * 15, 100);
-                matched = true;
-            }
+    let chosenPaths = [];
+    try {
+        const response = await fetch(PROXY_URL, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+                messages: [
+                    { role: "system", content: searchPrompt },
+                    { role: "user", content: searchMsg }
+                ]
+            })
         });
 
-        if (matched) {
-            score += doc.priority * 50;
-        } else {
-            score = 0; // Kein Match -> Raus
+        if (response.ok) {
+            const result = await response.json();
+            let reply = result?.choices?.[0]?.message?.content || "[]";
+            // Markdown-Artefakte entfernen, falls die KI sie trotzdem macht
+            reply = reply.replace(/```json/gi, '').replace(/```/g, '').trim();
+            chosenPaths = JSON.parse(reply);
+            console.log("🧠 KI hat diese Pfade für den Kontext ausgewählt:", chosenPaths);
         }
-        return { doc, score };
-    });
+    } catch (e) {
+        console.warn("KI-Suche fehlgeschlagen, nutze Fallback...", e);
+    }
 
-    // MAXIMAL 5 Dokumente senden, um den Proxy-Error (HTTP 413) abzuwehren!
-    let topDocs = scored.filter(x => x.score > 0).sort((a, b) => b.score - a.score).slice(0, 5).map(x => x.doc);
+    // Fallback: Falls die KI versagt oder ungültiges JSON liefert
+    if (!Array.isArray(chosenPaths) || chosenPaths.length === 0) {
+        console.log("Nutze simplen Fallback-Algorithmus...");
+        return fallbackSearch(userQuery);
+    }
 
-    if (topDocs.length === 0) return { context: '', images: [] };
+    // Kontext zusammenbauen (Max 3000 Zeichen pro File gegen 413 Error!)
+    let contextStr = "";
+    let images = [];
+    let addedFiles = 0;
 
-    // Text pro Dokument auf 1500 Zeichen kappen (Proxy Limits)
-    let context = topDocs.map((d, i) => {
-        const label = i === 0 ? `[MAIN SOURCE]\nSOURCE: ${d.url}` : `SOURCE: ${d.url}`;
-        const ideaTag = d.isGameIdea ? '\n[NOTE: GAME IDEA / CONCEPT]' : '';
-        const backupTag = d.isBackup ? '\n[NOTE: BACKUP / ARCHIVE]' : '';
-
-        // Schneiden und Formatierung grob beibehalten
-        let cleanText = d.rawText.substring(0, 1500);
-        return `${label}${ideaTag}${backupTag}\nCONTENT:\n${cleanText}`;
-    }).join('\n\n---\n\n');
-
-    const seenImages = new Set();
-    const images = [];
-    for (const doc of topDocs) {
-        for (const img of (doc.images || [])) {
-            if (!seenImages.has(img.filename)) {
-                seenImages.add(img.filename);
-                images.push(img);
-            }
+    for (const path of chosenPaths) {
+        if (addedFiles >= 4) break;
+        const fullUrl = BASE_URL + path;
+        const doc = searchIndex.find(d => d.url === fullUrl || d.url === path);
+        
+        if (doc) {
+            const label = addedFiles === 0 ? `[MAIN SOURCE]\nSOURCE: ${doc.url}` : `SOURCE: ${doc.url}`;
+            const ideaTag = doc.isGameIdea ? '\n[NOTE: This is a GAME IDEA / CONCEPT — NOT a released project]' : '';
+            const backupTag = doc.isBackup ? '\n[NOTE: This is BACKUP / ARCHIVE content]' : '';
+            
+            // RawText verwenden, um C/JS/CSS Formatierungen zu erhalten!
+            const snippet = doc.rawText.substring(0, 3000);
+            contextStr += `${label}${ideaTag}${backupTag}\nCONTENT:\n${snippet}\n\n---\n\n`;
+            
+            if (doc.images) images.push(...doc.images);
+            addedFiles++;
         }
     }
 
-    return { context, images };
+    if (addedFiles === 0) return fallbackSearch(userQuery);
+    return { context: contextStr, images };
+}
+
+// Simples Fallback falls der 1. KI Call abstürzt
+function fallbackSearch(userMessage) {
+    const words = userMessage.toLowerCase().split(/\W+/).filter(w => w.length > 3);
+    const scored = searchIndex.map(doc => {
+        let score = 0;
+        words.forEach(word => {
+            if (doc.url.toLowerCase().includes(word)) score += 50;
+            if (doc.text.includes(word)) score += 10;
+        });
+        return { doc, score };
+    });
+    const topDocs = scored.filter(x => x.score > 0).sort((a, b) => b.score - a.score).slice(0, 3).map(x => x.doc);
+    const context = topDocs.map(d => `SOURCE: ${d.url}\nCONTENT:\n${d.rawText.substring(0, 2000)}`).join('\n\n---\n\n');
+    return { context, images: [] };
 }
 
 // ----------------------------------------------------------------------
-// File Attachment UI
+// File Attachment UI 
 // ----------------------------------------------------------------------
 function buildFileAttachmentUI() {
     const row = document.getElementById('chat-input-row');
@@ -310,7 +328,7 @@ function buildUserContent(promptText, files) {
     if (textFiles.length > 0) {
         fullText += '\n\n--- ATTACHED FILES ---';
         for (const f of textFiles) {
-            const preview = f.content.length > 3000 ? f.content.slice(0,3000)+'\n[... truncated ...]' : f.content;
+            const preview = f.content.length > 4000 ? f.content.slice(0,4000)+'\n[... truncated ...]' : f.content;
             fullText += `\n\nFILE: ${f.name}\nCONTENT:\n${preview}`;
         }
     }
@@ -367,4 +385,3 @@ function addMessage(sender, text) {
     .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')
     .replace(/(?<!\*)\*(?!\*)(.*?)(?<!\*)\*(?!\*)/g, '<em>$1</em>')
     .replace(/
-    http://googleusercontent.com/immersive_entry_chip/0
