@@ -363,40 +363,69 @@ function renderFilePreviews() {
     });
 }
 
-function buildFileContext() {
-    if (attachedFiles.length === 0) return '';
-    let parts = ['\n\n--- ANGEHÄNGTE DATEIEN ---'];
-    for (const f of attachedFiles) {
-        if (f.isText) {
+// Baut den user-content Array für die API:
+// Gibt ein Array zurück (multipart wenn Bilder dabei, sonst plain string)
+function buildUserContent(promptText, files) {
+    const textFiles = files.filter(f => f.isText);
+    const imageFiles = files.filter(f => f.isImage);
+    const otherFiles = files.filter(f => !f.isText && !f.isImage);
+
+    // Text-Anhänge in den Prompt integrieren
+    let fullText = promptText;
+    if (textFiles.length > 0) {
+        fullText += '\n\n--- ANGEHÄNGTE DATEIEN ---';
+        for (const f of textFiles) {
             const preview = f.content.length > 6000 ? f.content.slice(0, 6000) + '\n[... truncated ...]' : f.content;
-            parts.push(`DATEI: ${f.name}\nINHALT:\n${preview}`);
-        } else {
-            parts.push(`DATEI: ${f.name} (Typ: ${f.type}, Binär-Anhang – Inhalt als Base64 vorhanden, kann aber nicht direkt gelesen werden)`);
+            fullText += `\n\nDATEI: ${f.name}\nINHALT:\n${preview}`;
         }
     }
-    return parts.join('\n\n');
+    if (otherFiles.length > 0) {
+        fullText += '\n\n--- WEITERE ANHÄNGE (nicht lesbar) ---';
+        for (const f of otherFiles) {
+            fullText += `\n${f.name} (${f.type})`;
+        }
+    }
+
+    // Kein Bild → einfacher String
+    if (imageFiles.length === 0) return fullText;
+
+    // Bilder vorhanden → multipart content Array (OpenAI Vision Format)
+    const parts = [{ type: "text", text: fullText }];
+    for (const img of imageFiles) {
+        parts.push({
+            type: "image_url",
+            image_url: {
+                url: `data:${img.type};base64,${img.content}`,
+                detail: "auto"
+            }
+        });
+    }
+    return parts;
 }
 
 // ================================
 // API AUFRUFE
 // ================================
-async function queryGitHubModels(finalPrompt, userText, currentSystemPrompt, retries = 2) {
+async function queryGitHubModels(finalPrompt, userText, currentSystemPrompt, pendingFiles = [], retries = 2) {
     const historyWindow = chatHistory.slice(-6);
+
+    // User-Content: multipart wenn Bilder hängen dran, sonst string
+    const userContent = buildUserContent(finalPrompt, pendingFiles);
+
     const body = {
         messages: [
             { role: "system", content: currentSystemPrompt },
             ...historyWindow,
-            { role: "user", content: finalPrompt }
+            { role: "user", content: userContent }
         ]
     };
 
     let lastError;
     for (let attempt = 0; attempt <= retries; attempt++) {
         try {
-            return await _doFetch(body, finalPrompt, userText);
+            return await _doFetch(body, userText);
         } catch (e) {
             lastError = e;
-            // Bei 503/502 (HF Space schläft) kurz warten und nochmal
             if (attempt < retries && (e.message.includes('503') || e.message.includes('502') || e.message.includes('504'))) {
                 console.warn(`Proxy schläft, warte 3s... (Versuch ${attempt + 1}/${retries})`);
                 await new Promise(r => setTimeout(r, 3000));
@@ -408,7 +437,7 @@ async function queryGitHubModels(finalPrompt, userText, currentSystemPrompt, ret
     throw lastError;
 }
 
-async function _doFetch(body, finalPrompt, userText) {
+async function _doFetch(body, userText) {
     const response = await fetch(PROXY_URL, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -428,7 +457,6 @@ async function _doFetch(body, finalPrompt, userText) {
         throw new Error(`Proxy-Antwort kein gültiges JSON: ${jsonErr.message}`);
     }
 
-    // Proxy gibt manchmal einen eigenen error-Key zurück
     if (result?.error) {
         throw new Error(`Proxy-Fehler: ${JSON.stringify(result.error).slice(0, 300)}`);
     }
@@ -536,13 +564,10 @@ async function sendMessage() {
     addMessage('Traveler', text);
     inputField.value = '';
 
-    // Datei-Kontext sammeln BEVOR wir attachedFiles leeren
-    const fileContext = buildFileContext();
-    const hadFiles = attachedFiles.length > 0;
-    if (hadFiles) {
-        attachedFiles = [];
-        renderFilePreviews();
-    }
+    // Snapshot der Anhänge jetzt (vor async) — pendingFiles geht in buildUserContent
+    const pendingFiles = [...attachedFiles];
+    attachedFiles = [];
+    renderFilePreviews();
 
     const loadingId = 'loading-' + Date.now();
     const loadingDiv = document.createElement('div');
@@ -563,18 +588,18 @@ async function sendMessage() {
 
         const { context, images } = await fetchContext(searchQuery);
 
-        let finalPrompt;
+        let finalPromptText;
         if (activeSystemPrompt === TRAFKHOP_PROMPT) {
-            finalPrompt = context
-                ? `INTERNAL ARCHIVE DATA:\n${context}${fileContext}\n\nTASK: ${text}`
-                : `No direct archive entries found. Use your general understanding of the Triverse and the chat history.\n\nTASK: ${text}${fileContext}`;
+            finalPromptText = context
+                ? `INTERNAL ARCHIVE DATA:\n${context}\n\nTASK: ${text}`
+                : `No direct archive entries found. Use your general understanding of the Triverse and the chat history.\n\nTASK: ${text}`;
         } else {
-            finalPrompt = context
-                ? `Here are fragments from the Library:\n${context}${fileContext}\n\nAnswer the following question EXCLUSIVELY using information from these fragments - primarily the MAIN SOURCE.\n\nQuestion: ${text}`
-                : `${text}${fileContext}`;
+            finalPromptText = context
+                ? `Here are fragments from the Library:\n${context}\n\nAnswer the following question EXCLUSIVELY using information from these fragments - primarily the MAIN SOURCE.\n\nQuestion: ${text}`
+                : text;
         }
 
-        const reply = await queryGitHubModels(finalPrompt, text, activeSystemPrompt);
+        const reply = await queryGitHubModels(finalPromptText, text, activeSystemPrompt, pendingFiles);
         document.getElementById(loadingId)?.remove();
 
         if (!reply) {
