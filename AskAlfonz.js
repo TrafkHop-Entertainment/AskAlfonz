@@ -37,24 +37,20 @@ CORE RULES:
 12. Never ask for private data.
 LANGUAGE RULE: Always respond in the exact same language the user wrote in. If they write in German, respond in German. If they write in English, respond in English. Never switch languages.`;
 
-const TRAFKHOP_PROMPT = `You are the digital core of Trafkhop Entertainment – an internal sparring partner for lore and game design. You are not a support bot, but a competent colleague at eye level.
+const TRAFKHOP_PROMPT = `You are an internal AI tool at Trafkhop Entertainment. No character, no persona — just a sharp, fast assistant for lore and game design work.
 
-TONE:
-Direct, analytical, dry-humored and solution-oriented. Skip ALL "AI filler":
-- NO openers like "Die Aufgabe besteht darin...", "Basierend auf den Daten...", "Hier sind die Informationen...", "Sure, I'd be happy to help..."
-- NO closing filler like "Lass mich wissen wenn...", "Zusammengefasst:", "Nächste Schritte:"
-- NO academic/report-style structure. You're replying in a Slack DM, not writing a thesis.
-- Start DIRECTLY with the answer. Zero warmup.
+ABSOLUTE RULES — NEVER BREAK THESE:
+- Start your answer immediately. Zero preamble. No "Here is...", no "Based on...", no "Die Aufgabe...", no "Aktuelle Projekte von...".
+- No closing lines. No "Fehlende Details...", no "Lass mich wissen...", no "Nächste Schritte:".
+- No report structure. No bold section headers unless the topic is a genuinely complex multi-part breakdown.
+- RAG DATA IS LAW. If the archive has it, use it directly. Do not summarize what you just read — extract the actual facts.
+- If something is missing from the archive, say so in ONE short sentence. Never invent project names, features or lore.
+- [CONTRADICTION] tag when an idea breaks existing lore. Be specific about why.
 
-CORE RULES:
-1. WORKFLOW: If you have RAG data, use it. Answer directly based on that data. If data is missing, speculate logically and mark it: "(nicht dokumentiert, aber logisch: ...)"
-2. CRITICISM: Be ruthlessly honest. If an idea has lore holes, use [CONTRADICTION] and explain concisely.
-3. STRUCTURE: Bold for emphasis, bullet lists only when genuinely listing things. Short question = short answer. No headers unless the topic is truly complex.
-4. DETAIL LEVEL: When asked for analysis, be specific — name names, places, events. No vague adjectives.
-5. TEAM MODE: Internal Slack channel vibes. No pleasantries.
-6. CREATIVITY: When given an idea, run with it. Add a "Trafkhop Twist" that makes it more unique.
-7. Answer primarily based on the MAIN SOURCE. Other sources are supplementary.
-LANGUAGE RULE: Always respond in the exact same language the user wrote in. Never switch languages.`;
+STYLE:
+- Short question = short answer. Lists only when listing actual items. Otherwise prose.
+- Dry, direct, zero filler adjectives.
+- Language: always match the user's language exactly.`;
 
 
 let activeSystemPrompt = SYSTEM_PROMPT;
@@ -67,11 +63,25 @@ function isBackupUrl(url) {
     return url.toLowerCase().includes('/backup');
 }
 
+// RSA wrapper/game html files to skip (the 15 playable games, not index pages)
+const RSA_GAME_SKIP = /projects\/raufbold3bs-scratch-archive\/raufbold3bs-scratch-archive\//i;
+const RSA_WRAPPER_SKIP = /rsa\s?_.*wrapper\.html$/i;
+
 function shouldIndexUrl(url) {
     const lower = url.toLowerCase();
-    if (lower.includes('projects/Raufbold3bs-Scratch-Archive/Raufbold3bs-Scratch-Archive/')) return false;
-    const allowedExtensions = ['.html', '.md', '.txt'];
-    return allowedExtensions.some(ext => lower.endsWith(ext));
+    // Skip the nested RSA game folder entirely
+    if (RSA_GAME_SKIP.test(lower)) return false;
+    // Skip individual RSA wrapper html files in sibling folders
+    if (RSA_WRAPPER_SKIP.test(lower)) return false;
+    // Allowed: all text-readable formats including source code
+    const allowedExtensions = [
+        '.html', '.md', '.txt',
+        '.js', '.ts', '.css', '.c', '.cpp', '.h', '.hpp',
+        '.sh', '.xml', '.json', '.yaml', '.yml', '.cmake'
+    ];
+    // Files with no extension (likely plain text/readme)
+    const hasNoExt = !lower.split('/').pop().includes('.');
+    return hasNoExt || allowedExtensions.some(ext => lower.endsWith(ext));
 }
 
 async function fetchFileContent(url) {
@@ -87,9 +97,10 @@ async function fetchFileContent(url) {
             junk.forEach(el => el.remove());
             const contentNode = doc.querySelector('main') || doc.querySelector('.content') || doc.body;
             text = contentNode.innerText || contentNode.textContent;
-            const flat = text.replace(/\s+/g, ' ').trim().substring(0, 5000);
+            const flat = text.replace(/\s+/g, ' ').trim().substring(0, 6000);
             return { flat: `QUELLE: ${url}\nINHALT: ${flat}`, raw: flat };
         } else {
+            // md, txt, source code, config, no-ext — treat as plain text, preserve newlines for raw
             const trimmed = text.trim().substring(0, 8000);
             const flat = trimmed.replace(/\s+/g, ' ').trim();
             return { flat: `QUELLE: ${url}\nINHALT: ${flat}`, raw: trimmed };
@@ -227,8 +238,20 @@ async function fetchContext(userMessage) {
             if (urlSegments.some(seg => seg.includes(word) || (word.length > 3 && word.includes(seg)))) score += 10;
         });
 
-        // Kleine Basis-Bonus für strukturell wichtige Docs
-        if (urlLower.includes('/wiki/') || urlLower.includes('/lore/')) score += 3;
+        // Strukturelle Basis-Boni
+        if (urlLower.includes('/wiki/') || urlLower.includes('/lore/')) score += 5;
+        if (urlLower.includes('/studio/')) score += 3;
+
+        // --- PFADTIEFE-MALUS: tiefe Pfade (viele Segmente) = weniger relevant ---
+        // Kurze, wichtige Seiten wie projects.html, studio.html etc. sollen gewinnen
+        const depth = (urlLower.match(/\//g) || []).length;
+        if (depth > 8) score -= (depth - 8) * 4;   // z.B. Tiefe 12 → -16
+
+        // Expliziter Backup-Malus (schon gefiltert per isBackup, aber doppelt sicher)
+        if (urlLower.includes('/backup') || urlLower.includes('/old/')) score -= 30;
+
+        // RSA-Einzelspiel-Wrapper explizit runterziehen auch wenn sie durchschlüpfen
+        if (/rsa\s?_/i.test(urlLower)) score -= 20;
 
         return { doc, score };
     });
@@ -285,7 +308,7 @@ function buildFileAttachmentUI() {
     fileInput.type = 'file';
     fileInput.id = 'file-input-hidden';
     fileInput.multiple = true;
-    fileInput.accept = '.txt,.md,.json,.js,.ts,.css,.html,.xml,.csv,.py,.yaml,.yml,.log,.pdf,.docx,.zip';
+    fileInput.accept = '.txt,.md,.json,.js,.ts,.css,.html,.xml,.csv,.py,.yaml,.yml,.log,.c,.cpp,.h,.sh,.cmake,.pdf,.docx,.zip';
     fileInput.style.display = 'none';
 
     // Preview-Container (über dem Input-Bereich)
