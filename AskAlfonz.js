@@ -170,11 +170,38 @@ async function fetchContext(userQuery) {
     const searchPrompt = `You are the internal Database Router for Trafkhop Entertainment.
 You are given a User Query and a list of available file paths.
 YOUR ONLY TASK: Find the 1 to 4 file paths that most likely contain the answer to the query.
-- If asking for code (e.g. TrafkCalc), find the .c, .cpp, .js, .css or .html file.
-- If asking for lore, find relevant .md or .html files in the trafkverse/ folder.
-- If asking for projects, find projects.html or project folders.
 RETURN ONLY A RAW JSON ARRAY of strings. Do not use markdown blocks (\`\`\`json). Just the array.
-Example: ["projects/TrafkCalc/TrafkCalc/main.c", "trafkverse/Worlds/History.md"]`;
+Example: ["projects/TrafkCalc/TrafkCalc/main.c", "SourceHop-Notes/trafkverse/Information/BasicsOfTheVerses.html"]
+
+ARCHIVE MAP — use this to understand where things live:
+
+PROJECTS & CODE
+- projects/projects.html            → overview of all TrafkHop projects
+- projects/<Name>/<Name>/           → source files for that project (e.g. main.c, index.html, *.js)
+
+LORE & UNIVERSE
+- SourceHop-Notes/trafkverse/       → PRIMARY lore location (HTML notes)
+  - Information/BasicsOfTheVerses.html  → fundamental lore: what are Verses, Anam, the Outside
+  - Information/MagicBook.html          → magic system, Mana, spells, LE/Anam costs
+  - Information/UseCasesForMagicAndMagicalItems.html → applied magic, items
+  - Information/Alfönisß_*.html         → TrafkHops own language
+  - Worlds/                             → here are the storys, the history, culture and geography of all the worlds and places there are.
+  - Characters/                         → character sheets and bios
+- SourceHop-Notes/trafkverse/trafkverse.html → lore index/overview
+
+STUDIO & META
+- studio/                           → info about TrafkHop Entertainment as a studio
+- news/                             → news and updates
+- index.html                        → site homepage
+
+ROUTING RULES:
+- "lore / universe / verses / anam / mana / magic / grundwerk / etc" → SourceHop-Notes/trafkverse/Information/
+- "world / planet / <world name> / etc"   → SourceHop-Notes/trafkverse/Worlds/
+- "character / person / <name> / etc"     → SourceHop-Notes/trafkverse/Characters/ or Characters/<Name>
+- "projects / games / what are you working on / etc" → projects/projects.html
+- "code / source / snippet / <ProjectName> / etc" → projects/<ProjectName>/ source files
+- "studio / team / about / etc"           → studio/
+If nothing fits those criterias, think and pick the ones that fit the most`;
 
     const searchMsg = `USER QUERY: ${userQuery}\n\nAVAILABLE PATHS:\n${JSON.stringify(availablePaths)}`;
 
