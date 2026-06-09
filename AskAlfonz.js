@@ -384,4 +384,181 @@ function addMessage(sender, text) {
     .replace(/\[Button:\s*(.*?)\]/g, (match, buttonText) => `<a class="do" style="display:inline-block; margin:5px; background:#9069da; padding:5px 10px; border-radius:10px; cursor:pointer;" onclick="document.getElementById('chat-input').value='${buttonText.replace(/'/g,"\\'")}'; document.getElementById('send-btn').click();">${buttonText}</a>`)
     .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')
     .replace(/(?<!\*)\*(?!\*)(.*?)(?<!\*)\*(?!\*)/g, '<em>$1</em>')
-    .replace(/
+    .replace(/\n/g, '<br>');
+
+    if (sender === 'Traveler') {
+        msgDiv.innerHTML = `<b style="color:#7FFFD4;">Traveler:</b> <p>${text}</p>`;
+    } else {
+        msgDiv.innerHTML = `<b style="color:#C41E3A;">${sender}:</b> <p>${formattedText}</p>`;
+    }
+    chatWindow.appendChild(msgDiv);
+    chatWindow.scrollTop = chatWindow.scrollHeight;
+}
+
+function addImages(images) {
+    const container = document.createElement('div');
+    container.style.cssText = 'margin-bottom:15px; display:flex; flex-wrap:wrap; gap:10px;';
+
+    images.forEach(img => {
+        const wrapper = document.createElement('div');
+        wrapper.style.cssText = 'display:flex; flex-direction:column; align-items:center; max-width:280px;';
+
+        const imgEl = document.createElement('img');
+        imgEl.src = img.url;
+        imgEl.alt = img.label;
+        imgEl.title = img.label;
+        imgEl.style.cssText = `
+            max-width: 280px;
+            max-height: 220px;
+            border-radius: 6px;
+            border: 1px solid #5a3998;
+            cursor: pointer;
+            object-fit: contain;
+            background: #1a0a2e;
+        `;
+        imgEl.addEventListener('click', () => window.open(img.url, '_blank'));
+        imgEl.addEventListener('error', () => { wrapper.style.display = 'none'; });
+
+        const caption = document.createElement('p');
+        caption.textContent = img.label;
+        caption.style.cssText = 'font-size:11px; color:#9069da; margin:4px 0 0; text-align:center;';
+
+        wrapper.appendChild(imgEl);
+        wrapper.appendChild(caption);
+        container.appendChild(wrapper);
+    });
+
+    chatWindow.appendChild(container);
+    chatWindow.scrollTop = chatWindow.scrollHeight;
+}
+
+// ----------------------------------------------------------------------
+// Nachricht senden
+// ----------------------------------------------------------------------
+async function sendMessage() {
+    let text = inputField.value.trim();
+    if (!text) return;
+
+    const pendingFiles = [...attachedFiles];
+    attachedFiles = [];
+    renderFilePreviews();
+
+    const lowerText = text.toLowerCase();
+
+    // Bot-Modus umschalten
+    if (lowerText.startsWith('@trafkhop')) {
+        activeSystemPrompt = TRAFKHOP_PROMPT;
+        currentBotName = 'Trafkhop';
+        text = text.replace(/^@trafkhop\s*/i, '').trim();
+        if (!text) {
+            addMessage('System', 'Mode switched. You are now talking to Trafkhop.');
+            inputField.value = '';
+            return;
+        }
+    } else if (lowerText.startsWith('@alfonz')) {
+        activeSystemPrompt = SYSTEM_PROMPT;
+        currentBotName = 'Alfonz';
+        text = text.replace(/^@alfonz\s*/i, '').trim();
+        if (!text) {
+            addMessage('System', 'Mode switched. You are now talking to Alfonz again.');
+            inputField.value = '';
+            return;
+        }
+    }
+
+    addMessage('Traveler', text);
+    inputField.value = '';
+
+    const loadingId = 'loading-' + Date.now();
+    const loadingDiv = document.createElement('div');
+    loadingDiv.id = loadingId;
+    loadingDiv.innerHTML = `<b style="color:#9069da;">${currentBotName}:</b> <p><em>...searching the faded pages...</em></p>`;
+    chatWindow.appendChild(loadingDiv);
+    chatWindow.scrollTop = chatWindow.scrollHeight;
+
+    try {
+        // Follow-up Erkennung: Suchanfrage mit letzter Frage anreichern
+        let lastQuestion = '';
+        for (let i = chatHistory.length - 1; i >= 0; i--) {
+            if (chatHistory[i].role === 'user') { lastQuestion = chatHistory[i].content; break; }
+        }
+        const isFollowUp = /mehr|weiter|und was|genauer|details|erzähl|nochmal|was ist damit|more|tell me more|go on|elaborate|and what|what about/i.test(lowerText);
+        const searchQuery = (isFollowUp && lastQuestion) ? `${text} ${lastQuestion}` : text;
+
+        // Index-Status berücksichtigen: Falls noch nicht fertig, kurz warten
+        if (!indexReady) {
+            const waitDiv = document.createElement('div');
+            waitDiv.style.cssText = 'color:#ede59f; font-size:0.85rem; margin-bottom:8px;';
+            waitDiv.textContent = '(Index wird noch geladen, einen Moment...)';
+            chatWindow.appendChild(waitDiv);
+            chatWindow.scrollTop = chatWindow.scrollHeight;
+            // Warte max. 15 Sekunden auf Index
+            for (let i = 0; i < 30 && !indexReady; i++) {
+                await new Promise(r => setTimeout(r, 500));
+            }
+            waitDiv.remove();
+        }
+
+        const { context, images } = await fetchContext(searchQuery);
+
+        let finalPrompt;
+        if (activeSystemPrompt === TRAFKHOP_PROMPT) {
+            finalPrompt = context
+                ? `INTERNAL ARCHIVE DATA:\n${context}\n\nTASK: ${text}\n\nAnalyze the task based on the data.`
+                : `No direct archive entries found. Use your general understanding of the Triverse and the chat history for a creative assessment of: ${text}`;
+        } else {
+            finalPrompt = context
+                ? `Here are fragments from the Library:\n${context}\n\nAnswer the following question EXCLUSIVELY using information from these fragments — answer primarily based on the MAIN SOURCE. Other sources are supplementary only.\n\nQuestion: ${text}`
+                : text;
+        }
+
+        const reply = await queryGitHubModels(finalPrompt, text, activeSystemPrompt, pendingFiles);
+        document.getElementById(loadingId)?.remove();
+
+        if (!reply) {
+            addMessage(currentBotName, '*clears throat* ... The memories are scattered today.');
+        } else {
+            addMessage(currentBotName, reply);
+        }
+
+        if (images && images.length > 0) addImages(images);
+
+    } catch (e) {
+        document.getElementById(loadingId)?.remove();
+        addMessage(currentBotName, `*trembles slightly* ... The connection has been severed. (Error: ${e.message})`);
+        console.error(e);
+    }
+}
+
+// ----------------------------------------------------------------------
+// Init
+// ----------------------------------------------------------------------
+document.addEventListener('DOMContentLoaded', async function () {
+    chatWindow  = document.getElementById('chat-window');
+    inputField  = document.getElementById('chat-input');
+    sendBtn     = document.getElementById('send-btn');
+    quickActions = document.getElementById('quick-actions');
+
+    if (!chatWindow || !inputField || !sendBtn) {
+        console.error('❌ Chat-Elemente nicht gefunden!');
+        return;
+    }
+
+    sendBtn.addEventListener('click', sendMessage);
+    inputField.addEventListener('keypress', e => {
+        if (e.key === 'Enter') sendMessage();
+    });
+
+    buildFileAttachmentUI();
+
+    // Sitemap + Index im Hintergrund laden — blockiert NICHT das Senden!
+    loadSitemap().then(() => buildSearchIndex()).catch(e => {
+        console.warn('Sitemap/Index Ladefehler:', e);
+        indexReady = true; // Fallback freischalten
+    });
+});
+
+//Copyright © 2026 TrafkHop Entertainment™
+//All rights reserved.
+
+//MADE WITH AI
