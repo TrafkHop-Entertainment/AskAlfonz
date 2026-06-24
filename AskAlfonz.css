@@ -30,19 +30,6 @@ Farben
     gap: 1rem;
 }
 
-main::before {
-    content: "";
-    position: absolute;
-    top: 0; left: 0; right: 0; bottom: 0;
-
-    background-image: url("SourceHop-Notes/assets/SourceHop-Images/ModelsJourney/13WorldsBG3.png");
-    background-color: transparent;
-    background-repeat: no-repeat;
-    background-position: center top;
-    background-position-y: -5rem;
-    background-size: cover;
-}
-
 #chat-input {
     padding: 0.65rem;
     font-size: 1.15rem;
