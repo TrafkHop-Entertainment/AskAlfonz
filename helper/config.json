@@ -1,0 +1,25 @@
+{
+  "_comment": "Diese Datei steuert den lokalen Alfonz-Helper. Trag hier deinen Root-Ordner ein und passe ggf. die Ports an. Nach Änderungen: Helper neu starten.",
+
+  "rootFolder": "/run/media/raubo/RaubosHDD2/TrafkSite",
+
+  "_comment_ports": "helperPort = HTTPS-Port für dieses Helper-Skript selbst. ollamaTarget = wo Ollama lokal lauscht (Standard von Ollama, normalerweise nicht ändern).",
+  "helperPort": 7861,
+  "ollamaTarget": "http://127.0.0.1:11434",
+
+  "_comment_cors": "Trag hier alle Adressen ein, von denen aus die Website auf den Helper zugreifen darf. Sowohl die Live-Version (GitHub Pages) als auch deine lokalen Test-URLs (z.B. WebStorm Live Server) müssen hier stehen.",
+  "allowedOrigins": [
+    "https://trafkhop-entertainment.github.io",
+    "http://localhost:63342",
+    "http://127.0.0.1:63342"
+  ],
+
+  "_comment_files": "Dateiendungen, die der Datei-Endpunkt überhaupt ausliefert. Schützt davor, dass z.B. .exe oder ungewollte Binärdateien vom Root-Ordner ausgelesen werden.",
+  "allowedExtensions": [
+    ".html", ".htm", ".md", ".txt", ".css", ".js", ".json", ".xml",
+    ".c", ".cpp", ".h", ".py", ".csv", ".yaml", ".yml"
+  ],
+
+  "_comment_exclude": "Ordnernamen, die beim Durchsuchen des Root-Ordners komplett ignoriert werden.",
+  "excludeFolders": [".git", "node_modules", ".idea", "helper", "certs"]
+}

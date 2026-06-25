@@ -1,0 +1,78 @@
+/*
+Farben
+*/
+
+:root {
+    --Kraft:      #fff495;
+    --Kraft-dark: #ede59f;
+    --Trafk:      #5a3998;
+    --Trafk-dark: #351b67;
+}
+
+#chat-window {
+    position: fixed;
+    top: 8rem;
+    right: 3rem;
+    left: 3rem;
+    bottom: 8rem;
+    color: white;
+    overflow: scroll;
+}
+#chat-input-row {
+    position: fixed;
+    bottom: 4rem;
+    height: 6rem;
+    left: 4rem;
+    right: 4rem;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 1rem;
+}
+
+#chat-input {
+    padding: 0.65rem;
+    font-size: 1.15rem;
+    font-weight: bold;
+    border: none;
+    border-radius: 15px;
+    filter: drop-shadow(0px 0px 5px var(--Kraft));
+    background-color: var(--Kraft);
+}
+#chat-input::placeholder {
+    color: black;
+}
+
+#send-btn {
+    height: 3rem;
+    width: 3rem;
+    color: white;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background-color: var(--Trafk);
+    border: 5px solid var(--Trafk-dark);
+    border-radius: 50%;
+    filter: none;
+}
+/* === Datei-Anhang Chips === */
+#file-preview-container {
+    position: fixed;
+    bottom: 10.5rem;
+    left: 4rem;
+    right: 4rem;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    pointer-events: none;
+}
+#file-preview-container > div {
+    pointer-events: all;
+}
+
+/* Attach-Button Hover */
+#attach-btn:hover {
+    background: rgba(90, 57, 152, 0.3) !important;
+    border-color: var(--Kraft) !important;
+    transition: all 0.2s;
+}
