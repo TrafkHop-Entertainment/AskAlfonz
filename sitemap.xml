@@ -66,37 +66,37 @@
     <priority>0.65</priority>
   </url>
   <url>
-    <loc>https://trafkhop-entertainment.github.io/TrafkSite/Legal/LegalNotice/legalNotice.css</loc>
-    <lastmod>2026-06-25</lastmod>
-    <priority>0.65</priority>
-  </url>
-  <url>
-    <loc>https://trafkhop-entertainment.github.io/TrafkSite/Legal/LegalNotice/legalNotice.html</loc>
+    <loc>https://trafkhop-entertainment.github.io/TrafkSite/Legal/LegalNotice/LegalNotice.html</loc>
     <lastmod>2026-06-25</lastmod>
     <priority>0.85</priority>
   </url>
   <url>
-    <loc>https://trafkhop-entertainment.github.io/TrafkSite/Legal/PrivacyPolicy/privacyPolicy.css</loc>
+    <loc>https://trafkhop-entertainment.github.io/TrafkSite/Legal/LegalNotice/LegalNotice.css</loc>
     <lastmod>2026-06-25</lastmod>
     <priority>0.65</priority>
   </url>
   <url>
-    <loc>https://trafkhop-entertainment.github.io/TrafkSite/Legal/PrivacyPolicy/privacyPolicy.html</loc>
+    <loc>https://trafkhop-entertainment.github.io/TrafkSite/Legal/PrivacyPolicy/PrivacyPolicy.html</loc>
     <lastmod>2026-06-25</lastmod>
     <priority>0.85</priority>
   </url>
   <url>
-    <loc>https://trafkhop-entertainment.github.io/TrafkSite/Legal/License/license.html</loc>
-    <lastmod>2026-06-25</lastmod>
-    <priority>0.85</priority>
-  </url>
-  <url>
-    <loc>https://trafkhop-entertainment.github.io/TrafkSite/Legal/License/license.css</loc>
+    <loc>https://trafkhop-entertainment.github.io/TrafkSite/Legal/PrivacyPolicy/PrivacyPolicy.css</loc>
     <lastmod>2026-06-25</lastmod>
     <priority>0.65</priority>
   </url>
   <url>
-    <loc>https://trafkhop-entertainment.github.io/TrafkSite/Files/Volume.js</loc>
+    <loc>https://trafkhop-entertainment.github.io/TrafkSite/Legal/License/License.css</loc>
+    <lastmod>2026-06-25</lastmod>
+    <priority>0.65</priority>
+  </url>
+  <url>
+    <loc>https://trafkhop-entertainment.github.io/TrafkSite/Legal/License/License.html</loc>
+    <lastmod>2026-06-25</lastmod>
+    <priority>0.85</priority>
+  </url>
+  <url>
+    <loc>https://trafkhop-entertainment.github.io/TrafkSite/Files/Parallax.js</loc>
     <lastmod>2026-06-25</lastmod>
     <priority>0.65</priority>
   </url>
@@ -106,29 +106,29 @@
     <priority>0.65</priority>
   </url>
   <url>
-    <loc>https://trafkhop-entertainment.github.io/TrafkSite/Files/Parallax.js</loc>
+    <loc>https://trafkhop-entertainment.github.io/TrafkSite/Files/Volume.js</loc>
     <lastmod>2026-06-25</lastmod>
     <priority>0.65</priority>
   </url>
   <url>
-    <loc>https://trafkhop-entertainment.github.io/TrafkSite/Files/footer.html</loc>
+    <loc>https://trafkhop-entertainment.github.io/TrafkSite/Files/Placeholder.js</loc>
+    <lastmod>2026-06-25</lastmod>
+    <priority>0.65</priority>
+  </url>
+  <url>
+    <loc>https://trafkhop-entertainment.github.io/TrafkSite/Files/Header.html</loc>
     <lastmod>2026-06-25</lastmod>
     <priority>0.85</priority>
   </url>
   <url>
-    <loc>https://trafkhop-entertainment.github.io/TrafkSite/Files/placeholder.js</loc>
+    <loc>https://trafkhop-entertainment.github.io/TrafkSite/Files/Standard.css</loc>
     <lastmod>2026-06-25</lastmod>
     <priority>0.65</priority>
   </url>
   <url>
-    <loc>https://trafkhop-entertainment.github.io/TrafkSite/Files/header.html</loc>
+    <loc>https://trafkhop-entertainment.github.io/TrafkSite/Files/Footer.html</loc>
     <lastmod>2026-06-25</lastmod>
     <priority>0.85</priority>
-  </url>
-  <url>
-    <loc>https://trafkhop-entertainment.github.io/TrafkSite/Files/standard.css</loc>
-    <lastmod>2026-06-25</lastmod>
-    <priority>0.65</priority>
   </url>
   <url>
     <loc>https://trafkhop-entertainment.github.io/TrafkSite/Wiki/Wiki.css</loc>
