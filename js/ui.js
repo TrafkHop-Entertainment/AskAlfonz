@@ -64,16 +64,23 @@ const UI = (() => {
         importBtn.textContent = 'Chat laden';
         importBtn.title = 'Gespräch aus Markdown-Datei laden';
 
+        const infoBtn = document.createElement('button');
+        infoBtn.id = 'alfonz-info-btn';
+        infoBtn.className = 'do alfonz-bar-btn';
+        infoBtn.textContent = 'ℹ️';
+        infoBtn.title = 'Datenschutz & wie man Alfonz benutzt';
+
         bar.appendChild(statusWrap);
         bar.appendChild(thinkWrap);
         bar.appendChild(modelSelect);
         bar.appendChild(exportBtn);
         bar.appendChild(importBtn);
+        bar.appendChild(infoBtn);
 
         const main = document.querySelector('main');
         main.insertBefore(bar, chatWindow);
 
-        return { exportBtn, importBtn };
+        return { exportBtn, importBtn, infoBtn };
     }
 
     function setStatus(ok, label) {
@@ -225,8 +232,8 @@ const UI = (() => {
             return null;
         }
 
-        const { exportBtn, importBtn } = buildStatusBar();
-        return { chatWindow, inputField, sendBtn, exportBtn, importBtn };
+        const { exportBtn, importBtn, infoBtn } = buildStatusBar();
+        return { chatWindow, inputField, sendBtn, exportBtn, importBtn, infoBtn };
     }
 
     return {

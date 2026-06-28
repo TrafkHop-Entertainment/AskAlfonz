@@ -6,6 +6,43 @@
 let chatHistory = []; // [{role: 'user'|'assistant'|'system', content}, ...]
 
 // ----------------------------------------------------------------------
+// Persistierung über sessionStorage (NICHT localStorage, NICHT Cookies!).
+//
+// Grund: Browser entladen ("discarden") inaktive Tabs nach einigen
+// Minuten automatisch, um RAM zu sparen — dabei geht JEDE normale
+// JS-Variable (wie unser chatHistory-Array) komplett verloren, der Tab
+// wirkt beim Zurückkommen wie neu geladen. sessionStorage überlebt das,
+// weil er getrennt vom JS-Heap im Browser selbst gespeichert wird.
+//
+// Wichtig zur Abgrenzung von Cookies/Tracking: sessionStorage wird NIE an
+// einen Server geschickt, existiert rein lokal im Browser, und verschwindet
+// automatisch, sobald der Tab komplett geschlossen wird (anders als
+// localStorage, das bleiben würde). Kein Tracking, kein Account, passt
+// damit zur "keine Cookies"-Philosophie dieses Projekts.
+// ----------------------------------------------------------------------
+const SESSION_STORAGE_KEY = 'alfonz_chat_history';
+
+function saveHistoryToSession() {
+    try {
+        sessionStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify(chatHistory));
+    } catch (e) {
+        console.warn('Konnte Verlauf nicht in sessionStorage speichern:', e);
+    }
+}
+
+function loadHistoryFromSession() {
+    try {
+        const raw = sessionStorage.getItem(SESSION_STORAGE_KEY);
+        if (!raw) return [];
+        const parsed = JSON.parse(raw);
+        return Array.isArray(parsed) ? parsed : [];
+    } catch (e) {
+        console.warn('Konnte Verlauf nicht aus sessionStorage laden:', e);
+        return [];
+    }
+}
+
+// ----------------------------------------------------------------------
 // Helper-Status periodisch prüfen, UND bei Erfolg die echten installierten
 // Ollama-Modelle abrufen (ersetzt die hartcodierte Fallback-Liste im
 // Dropdown durch das, was tatsächlich auf diesem PC verfügbar ist).
@@ -59,6 +96,7 @@ async function askOllama(messages, model, think) {
     // die eigentliche Frage erneut (mit komprimiertem Verlauf) stellen.
     if (Memory.wantsCompression(result.message)) {
         chatHistory = await Memory.compress(chatHistory, model);
+        saveHistoryToSession();
         const freshMessages = [
             { role: 'system', content: ALFONZ_SYSTEM_PROMPT },
             ...chatHistory
@@ -104,20 +142,43 @@ async function sendMessage(inputField) {
 
         const { context, images, unavailable } = await RagSearch.fetchContext(text, model);
 
-        let finalPrompt;
+        // WICHTIG: Nur die REINE Userfrage landet dauerhaft in chatHistory
+        // UND wird als "user"-Rolle an Ollama geschickt — genau das, was
+        // der Traveler tatsächlich geschrieben hat, nichts weiter.
+        //
+        // Der RAG-Kontext bekommt eine EIGENE "system"-Nachricht, NICHT
+        // role:'user'. Vorher stand der komplette "Here are fragments..."-
+        // Block als Teil der User-Nachricht im Verlauf — das Modell sah
+        // dadurch wortwörtlich "Traveler: Here are fragments..." und
+        // vermischte die charakterliche Anrede "Traveler" (aus dem
+        // System-Prompt) mit unserem technischen RAG-Text. Mit einer
+        // separaten system-Rolle ist für das Modell klar erkennbar: das
+        // ist Hintergrundinformation, keine Aussage des Travelers.
+        //
+        // Zusätzlich landet der RAG-Kontext NIE in chatHistory selbst,
+        // sondern wird nur für DIESE EINE Anfrage angehängt — sonst bläht
+        // sich der Verlauf mit jeder Nachricht weiter auf, und alte
+        // RAG-Treffer aus früheren, unrelated Fragen blieben für immer im
+        // Kontext (das war die Hauptursache für "falsche Erinnerungen" an
+        // Code-Dateien aus ganz anderen, früheren Fragen).
+        chatHistory.push({ role: 'user', content: text });
+        saveHistoryToSession();
+
+        let ragContextMessage = null;
         if (context) {
-            finalPrompt = `Here are fragments from the Library:\n${context}\n\nAnswer the following question primarily using information from these fragments — treat the MAIN SOURCE as authoritative, others as supplementary.\n\nQuestion: ${text}`;
+            ragContextMessage = `Here are fragments from the Library, found for the Traveler's most recent question:\n${context}\n\nAnswer the Traveler's question primarily using information from these fragments — treat the MAIN SOURCE as authoritative, others as supplementary.`;
         } else if (unavailable) {
-            finalPrompt = `${text}\n\n(Note: nothing relevant was found locally, and web search is not yet configured. Answer from your own general knowledge if you can, and mention that you couldn't check the archive or the web for this one.)`;
-        } else {
-            finalPrompt = text;
+            ragContextMessage = `(Note: nothing relevant was found locally for the Traveler's most recent question, and web search is not yet configured. Answer from your own general knowledge if you can, and mention that you couldn't check the archive or the web for this one.)`;
         }
 
-        chatHistory.push({ role: 'user', content: finalPrompt });
-
+        // messages = bisheriger SAUBERER Verlauf (nur reine Fragen/Antworten)
+        // + optionaler frischer RAG-Kontext als system-Nachricht + die
+        // aktuelle, unveränderte Userfrage.
         const messages = [
             { role: 'system', content: ALFONZ_SYSTEM_PROMPT },
-            ...chatHistory
+            ...chatHistory.slice(0, -1), // bisheriger Verlauf, ohne RAG-Blöcke
+            ...(ragContextMessage ? [{ role: 'system', content: ragContextMessage }] : []),
+            { role: 'user', content: text }
         ];
 
         const { content: reply, thinking } = await askOllama(messages, model, think);
@@ -128,6 +189,7 @@ async function sendMessage(inputField) {
         } else {
             UI.addMessage('Alfonz', reply, thinking);
             chatHistory.push({ role: 'assistant', content: reply });
+            saveHistoryToSession();
         }
 
         if (images && images.length > 0) UI.addImages(images);
@@ -153,6 +215,7 @@ async function handleImport() {
     const result = await ChatExport.importChat();
     if (result.ok && result.history) {
         chatHistory = result.history;
+        saveHistoryToSession();
         UI.clearChatWindow();
         for (const msg of chatHistory) {
             if (msg.role === 'user') UI.addMessage('Traveler', msg.content);
@@ -169,7 +232,24 @@ async function handleImport() {
 document.addEventListener('DOMContentLoaded', async function () {
     const refs = UI.init();
     if (!refs) return;
-    const { inputField, sendBtn, exportBtn, importBtn } = refs;
+    const { inputField, sendBtn, exportBtn, importBtn, infoBtn } = refs;
+
+    // Verlauf aus sessionStorage wiederherstellen (z.B. nach Tab-Discarding
+    // durch den Browser, siehe Kommentar bei saveHistoryToSession oben).
+    // Nur die Nachrichten selbst kommen zurück — RAG-Kontext-Blöcke waren
+    // ja sowieso nie Teil der gespeicherten History (siehe sendMessage).
+    const restoredHistory = loadHistoryFromSession();
+    if (restoredHistory.length > 0) {
+        chatHistory = restoredHistory;
+        UI.clearChatWindow();
+        for (const msg of chatHistory) {
+            if (msg.role === 'user') UI.addMessage('Traveler', msg.content);
+            else if (msg.role === 'assistant') UI.addMessage('Alfonz', msg.content);
+            // role:'system' (z.B. Kompressions-Zusammenfassungen) wird
+            // bewusst NICHT im Chat-Fenster angezeigt, nur intern behalten.
+        }
+        console.log(`🔄 Verlauf aus sessionStorage wiederhergestellt (${chatHistory.length} Einträge).`);
+    }
 
     sendBtn.addEventListener('click', () => sendMessage(inputField));
     inputField.addEventListener('keypress', e => {
@@ -177,6 +257,11 @@ document.addEventListener('DOMContentLoaded', async function () {
     });
     exportBtn.addEventListener('click', handleExport);
     importBtn.addEventListener('click', handleImport);
+    infoBtn.addEventListener('click', () => InfoPopup.showManually());
+
+    // Datenschutz-/Anleitungs-Popup beim allerersten Besuch dieser Sitzung
+    // zeigen (siehe infoPopup.js für Details zur sessionStorage-Logik).
+    InfoPopup.showIfFirstVisit();
 
     // Helper-Status sofort prüfen, danach alle 30s erneut (z.B. falls
     // der Helper erst NACH dem Laden der Seite gestartet wird)

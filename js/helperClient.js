@@ -90,6 +90,18 @@ const HelperClient = (() => {
         if (!res.ok) {
             let detail = '';
             try { detail = (await res.json()).error || ''; } catch (e) { /* ignore */ }
+
+            // Manche Modelle (z.B. Mixtral) unterstützen GAR KEIN Tool-Calling
+            // und lehnen den kompletten Request mit HTTP 400 + dieser
+            // Fehlermeldung ab, statt (wie z.B. Llama 3.2 3B) einfach einen
+            // kaputten Text zu improvisieren. Erkennen wir das, retrien wir
+            // automatisch EINMAL ohne Tools, statt den User eine technische
+            // Fehlermeldung sehen zu lassen.
+            if (res.status === 400 && /does not support tools/i.test(detail) && tools) {
+                console.warn(`⚠️ Modell "${model}" unterstützt kein Tool-Calling — wiederhole Anfrage ohne Tools.`);
+                return chat(model, messages, null, think);
+            }
+
             throw new Error(`Ollama nicht erreichbar (HTTP ${res.status}). ${detail}`.trim());
         }
 

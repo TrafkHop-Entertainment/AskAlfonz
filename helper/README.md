@@ -1,8 +1,8 @@
 # Alfonz-Helper
 
 Das ist das kleine Programm, das **lokal auf deinem PC** läuft, damit Ask Alfonz
-(auf GitHub Pages) mit deinem lokalen Ollama reden und deinen Root-Ordner
-(`RaubosHDD2/TrafkSite/`) als RAG-Archiv lesen kann.
+(auf GitHub Pages) mit deinem lokalen Ollama reden und deinen Root-Ordner (z.B.:)
+(`run/media/hopx/TrafkSite/`) als RAG-Archiv lesen kann.
 
 Die Website selbst bleibt auf GitHub Pages — nur Ollama + dieser Helper laufen
 bei dir zuhause.

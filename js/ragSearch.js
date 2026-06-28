@@ -232,10 +232,29 @@ ROUTING RULES:
 - "studio / team / about / etc"           → studio/
 If nothing fits those criterias, think and pick the ones that fit the most`;
 
+    // Erkennt Backup-/Archiv-Pfade (z.B. ".../old/...", ".../Backups/...").
+    // Diese bleiben zwar im Index (für den seltenen Fall, dass jemand
+    // explizit nach einer alten Version fragt), werden aber standardmäßig
+    // NICHT der KI zur Auswahl angeboten — sonst greift sie (wie beobachtet)
+    // gerne zur alten Version, einfach weil sie zufällig im selben Ordner
+    // wie die aktuelle Datei liegt, ohne dass danach gefragt wurde.
+    function isBackupPath(p) {
+        return /\/old\//i.test(p) || /\/backups?\//i.test(p);
+    }
+
+    // Erkennt, ob die Userfrage selbst explizit nach einer alten/Backup-
+    // Version fragt — nur dann dürfen Backup-Pfade der KI angeboten werden.
+    function queryAsksForBackup(userQuery) {
+        return /\b(alt|alte|alten|backup|archiv|old|vorherige|frühere)\b/i.test(userQuery);
+    }
+
     // Stufe 1: KI wählt relevante Pfade aus der Sitemap-Liste.
     // Braucht eine chat()-Funktion (üblicherweise HelperClient.chat) und das aktuelle Modell.
     async function pickRelevantPaths(userQuery, model) {
-        const availablePaths = sitemapUrls.filter(shouldIndexPath);
+        let availablePaths = sitemapUrls.filter(shouldIndexPath);
+        if (!queryAsksForBackup(userQuery)) {
+            availablePaths = availablePaths.filter(p => !isBackupPath(p));
+        }
         const searchMsg = `USER QUERY: ${userQuery}\n\nAVAILABLE PATHS:\n${JSON.stringify(availablePaths)}`;
 
         try {
@@ -253,7 +272,16 @@ If nothing fits those criterias, think and pick the ones that fit the most`;
         return [];
     }
 
-    // Baut den Kontext-String aus gewählten Pfaden (max. 4 Dateien, 3000 Zeichen je Datei)
+    // KEIN Zeichen-Limit mehr — komplette Dateien werden immer voll
+    // eingefügt, egal wie lang. Bewusste Entscheidung: Vollständigkeit ist
+    // wichtiger als Performance/Sicherheit hier. RISIKO, das damit bewusst
+    // akzeptiert wird: Falls eine einzelne Quelle zufällig riesig ist, kann
+    // sie allein schon einen Großteil des num_ctx-Fensters (32768 Tokens,
+    // siehe config.js) aufbrauchen — Ollama schneidet bei Überschreitung
+    // STILL ab, ohne Fehlermeldung. Das LOG_WARN_CHAR_THRESHOLD unten
+    // dient nur der Transparenz in der Konsole, schneidet selbst NICHTS ab.
+    const LOG_WARN_CHAR_THRESHOLD = 50000;
+
     function buildContextFromPaths(chosenPaths) {
         let contextStr = '';
         let images = [];
@@ -268,8 +296,10 @@ If nothing fits those criterias, think and pick the ones that fit the most`;
             const label = addedFiles === 0 ? `[MAIN SOURCE]\nSOURCE: ${doc.path}` : `SOURCE: ${doc.path}`;
             const ideaTag = doc.isGameIdea ? '\n[NOTE: This is a GAME IDEA / CONCEPT — NOT a released project]' : '';
             const backupTag = doc.isBackup ? '\n[NOTE: This is BACKUP / ARCHIVE content]' : '';
-            const snippet = doc.rawText.substring(0, 3000);
-            contextStr += `${label}${ideaTag}${backupTag}\nCONTENT:\n${snippet}\n\n---\n\n`;
+            if (doc.rawText.length > LOG_WARN_CHAR_THRESHOLD) {
+                console.warn(`⚠️ "${doc.path}" ist sehr groß (${doc.rawText.length} Zeichen) — wird trotzdem komplett eingefügt, kann num_ctx sprengen.`);
+            }
+            contextStr += `${label}${ideaTag}${backupTag}\nCONTENT:\n${doc.rawText}\n\n---\n\n`;
 
             if (doc.images) images.push(...doc.images);
             addedFiles++;
@@ -280,17 +310,20 @@ If nothing fits those criterias, think and pick the ones that fit the most`;
 
     // Stufe 2 (Fallback): simple Keyword-Suche, falls die KI-Pfadwahl versagt.
     function fallbackKeywordSearch(userQuery) {
+        const allowBackups = queryAsksForBackup(userQuery);
         const words = userQuery.toLowerCase().split(/\W+/).filter(w => w.length > 3);
-        const scored = searchIndex.map(doc => {
-            let score = 0;
-            words.forEach(word => {
-                if (doc.path.toLowerCase().includes(word)) score += 50;
-                if (doc.text.includes(word)) score += 10;
+        const scored = searchIndex
+            .filter(doc => allowBackups || !isBackupPath(doc.path))
+            .map(doc => {
+                let score = 0;
+                words.forEach(word => {
+                    if (doc.path.toLowerCase().includes(word)) score += 50;
+                    if (doc.text.includes(word)) score += 10;
+                });
+                return { doc, score };
             });
-            return { doc, score };
-        });
         const topDocs = scored.filter(x => x.score > 0).sort((a, b) => b.score - a.score).slice(0, 3).map(x => x.doc);
-        const context = topDocs.map(d => `SOURCE: ${d.path}\nCONTENT:\n${d.rawText.substring(0, 2000)}`).join('\n\n---\n\n');
+        const context = topDocs.map(d => `SOURCE: ${d.path}\nCONTENT:\n${d.rawText}`).join('\n\n---\n\n');
         return { context, images: [], foundAny: topDocs.length > 0 };
     }
 
