@@ -103,6 +103,43 @@ function buildFilesRouter(config) {
         });
     });
 
+    // GET /api/files/read-binary?path=relativer/pfad/zum/bild.png
+    // Eigener Endpunkt für Bilder (Markdown-Anhänge im RAG-Archiv): liefert
+    // die rohen Bytes mit passendem Content-Type, statt sie als JSON/Text
+    // zu verpacken wie /read es tut. Eigene, engere Endungs-Whitelist —
+    // unabhängig von config.allowedExtensions, damit z.B. .exe niemals
+    // über diesen Weg ausgeliefert werden kann.
+    const IMAGE_MIME = {
+        '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg',
+        '.gif': 'image/gif', '.webp': 'image/webp', '.bmp': 'image/bmp',
+        '.svg': 'image/svg+xml'
+    };
+    router.get('/read-binary', (req, res) => {
+        const relPath = req.query.path;
+        if (!relPath) {
+            return res.status(400).json({ error: 'Parameter "path" fehlt.' });
+        }
+
+        const target = safeResolve(relPath);
+        if (!target) {
+            return res.status(400).json({ error: 'Ungültiger Pfad (außerhalb des Root-Ordners).' });
+        }
+
+        const ext = path.extname(target).toLowerCase();
+        const mime = IMAGE_MIME[ext];
+        if (!mime) {
+            return res.status(403).json({ error: `Dateityp "${ext}" ist hier nicht erlaubt (nur Bilder).` });
+        }
+
+        fs.readFile(target, (err, data) => {
+            if (err) {
+                return res.status(404).json({ error: 'Datei nicht gefunden oder nicht lesbar.', detail: err.message });
+            }
+            res.setHeader('Content-Type', mime);
+            res.send(data);
+        });
+    });
+
     return router;
 }
 

@@ -1,7 +1,7 @@
 {
   "_comment": "Diese Datei steuert den lokalen Alfonz-Helper. Trag hier deinen Root-Ordner ein und passe ggf. die Ports an. Nach Änderungen: Helper neu starten.",
 
-  "rootFolder": "/run/media/raubo/RaubosHDD2/TrafkSite",
+  "rootFolder": "/run/media/raubo/HopxSSD/TrafkSite",
 
   "_comment_ports": "helperPort = HTTPS-Port für dieses Helper-Skript selbst. ollamaTarget = wo Ollama lokal lauscht (Standard von Ollama, normalerweise nicht ändern).",
   "helperPort": 7861,
